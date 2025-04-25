@@ -1,1 +1,0 @@
-npx hardhat run scripts/upgrade.js --network holesky

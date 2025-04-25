@@ -1,1 +1,0 @@
-npx hardhat run scripts/verify.js --network holesky
