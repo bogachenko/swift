@@ -1,6 +1,6 @@
 // TransferSWIFT <https://github.com/bogachenko/swift>
 // License: MIT
-// Version 0.0.0.1 (unstable)
+// Version 0.0.0.1 (stable)
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
