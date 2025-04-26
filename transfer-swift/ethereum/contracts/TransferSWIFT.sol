@@ -1,6 +1,6 @@
 // TransferSWIFT <https://github.com/bogachenko/swift>
 // License: MIT
-// Version 0.0.0.1 (unstable)
+// Version 0.0.0.2 (unstable)
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -19,8 +19,8 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard {
     string public constant name = "TransferSWIFT";
     string public constant symbol = "SWIFT";
 
-    uint256 public constant MIN_TAX_FEE = 1e14; // 0.0001 ETH
-    uint256 public taxFee = MIN_TAX_FEE;
+    uint256 public constant CheckTaxFee = 1e14; // 0.0001 ETH
+    uint256 public taxFee = CheckTaxFee;
 
     uint256 public defaultMaxRecipients = 15;
     mapping(address => uint256) public maxRecipientsOverride;
@@ -66,7 +66,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard {
 
     // Owner functions
     function setTaxFee(uint256 _newFee) external onlyOwner {
-        require(_newFee >= MIN_TAX_FEE, "Fee too low");
+        require(_newFee >= CheckTaxFee, "Fee too low");
         emit TaxFeeChanged(taxFee, _newFee);
         taxFee = _newFee;
     }
@@ -95,7 +95,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard {
         emit BlacklistAdded(account);
     }
 
-    function removeBlacklist(address account) external onlyOwner {
+    function delBlacklist(address account) external onlyOwner {
         blacklist[account] = false;
         emit BlacklistRemoved(account);
     }
@@ -105,7 +105,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard {
         emit WhitelistERC20Added(token);
     }
 
-    function removeWhitelistERC20(address token) external onlyOwner {
+    function delWhitelistERC20(address token) external onlyOwner {
         whitelistERC20[token] = false;
         emit WhitelistERC20Removed(token);
     }
@@ -115,7 +115,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard {
         emit WhitelistERC721Added(token);
     }
 
-    function removeWhitelistERC721(address token) external onlyOwner {
+    function delWhitelistERC721(address token) external onlyOwner {
         whitelistERC721[token] = false;
         emit WhitelistERC721Removed(token);
     }
@@ -125,7 +125,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard {
         emit WhitelistERC1155Added(token);
     }
 
-    function removeWhitelistERC1155(address token) external onlyOwner {
+    function delWhitelistERC1155(address token) external onlyOwner {
         whitelistERC1155[token] = false;
         emit WhitelistERC1155Removed(token);
     }
