@@ -6,12 +6,12 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
@@ -73,7 +73,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         _;
     }
 
-    constructor() payable {}
+    constructor() payable Ownable(msg.sender) {}
 
     function supportsInterface(
         bytes4 interfaceId
@@ -117,7 +117,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     }
 
     function addWhitelistERC20(address token) external onlyOwner {
-        require(token.isContract(), "Must be contract");
         whitelistERC20[token] = true;
         emit WhitelistERC20Added(token);
     }
@@ -128,7 +127,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     }
 
     function addWhitelistERC721(address token) external onlyOwner {
-        require(token.isContract(), "Must be contract");
         whitelistERC721[token] = true;
         emit WhitelistERC721Added(token);
     }
@@ -139,7 +137,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     }
 
     function addWhitelistERC1155(address token) external onlyOwner {
-        require(token.isContract(), "Must be contract");
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Added(token);
     }
