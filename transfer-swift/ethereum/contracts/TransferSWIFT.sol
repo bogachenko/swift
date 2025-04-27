@@ -1,6 +1,6 @@
 // TransferSWIFT <https://github.com/bogachenko/swift>
 // License: MIT
-// Version 0.0.0.2 (unstable)
+// Version 0.0.0.3 (unstable)
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -22,8 +22,8 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     string public constant name = "TransferSWIFT";
     string public constant symbol = "SWIFT";
 
-    uint256 public constant CheckTaxFee = 1e14; // 0.0001 ETH
-    uint256 public taxFee = CheckTaxFee;
+    uint256 public constant checkTaxFee = 1e14; // 0.0001 ETH
+    uint256 public taxFee = checkTaxFee;
 
     uint256 public defaultMaxRecipients = 15;
     mapping(address => bool) public maxRecipientsOverride;
@@ -43,6 +43,8 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     uint256 public gasLimitErc20 = 70000;
     uint256 public gasLimitErc721 = 105000;
     uint256 public gasLimitErc1155 = 72000;
+
+    uint256 public accumulatedRoyalties;
 
     event MultiTransfer(
         address indexed sender,
@@ -66,7 +68,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     event Rescue(address indexed to, uint256 amount);
     event NonceUsed(bytes32 indexed nonce);
     event GasLimitTooHigh(string limitType);
-    event OnlyPausedWithdrawAllowed();
 
     modifier notBlacklisted(address account) {
         require(!blacklist[account], "Address blacklisted");
@@ -82,12 +83,12 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     }
     // Owner functions
     function setTaxFee(uint256 _newFee) external onlyOwner {
-        require(_newFee >= CheckTaxFee, "Fee too low");
+        require(_newFee >= checkTaxFee, "Fee too low");
         emit TaxFeeChanged(taxFee, _newFee);
         taxFee = _newFee;
     }
 
-    function grantMaxRecipients(address account) external onlyOwner {
+    function setMaxRecipients(address account) external onlyOwner {
         maxRecipientsOverride[account] = true;
         emit MaxRecipientsGranted(account);
     }
@@ -146,12 +147,20 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         emit WhitelistERC1155Removed(token);
     }
 
+    function withdrawRoyalties() external onlyOwner nonReentrant {
+        uint256 amount = accumulatedRoyalties;
+        require(amount > 0, "No royalties available");
+        accumulatedRoyalties = 0;
+        payable(owner()).transfer(amount);
+        emit Rescue(owner(), amount);
+    }
+
     // Rescue ETH when paused
     function rescueETH(address payable to) external onlyOwner whenPaused {
         require(to != address(0), "Zero address");
-        uint256 bal = address(this).balance;
+        uint256 bal = address(this).balance - accumulatedRoyalties;
+        require(bal > 0, "Nothing to rescue");
         emit Rescue(to, bal);
-        emit OnlyPausedWithdrawAllowed();
         to.transfer(bal);
     }
 
@@ -217,7 +226,12 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
             require(gasleft() >= gasLimitEth, "ETH gas limit");
             totalEth += ethAmounts[i];
         }
-        require(msg.value == totalEth + taxFee, "Incorrect ETH sent");
+
+        require(msg.value >= totalEth + taxFee, "Insufficient ETH sent");
+        accumulatedRoyalties += taxFee;
+        if (msg.value > totalEth + taxFee) {
+            payable(msg.sender).transfer(msg.value - (totalEth + taxFee));
+        }
 
         // Distribute ETH
         for (uint i = 0; i < ethRecipients.length; i++) {
@@ -296,10 +310,10 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
 
     // Fallback reject other tokens
     receive() external payable {
-        require(msg.sender != address(this), "Reject contract token");
+        revert("Direct ETH transfers not allowed");
     }
 
     fallback() external payable {
-        require(msg.sender != address(this), "Reject contract token");
+        revert("Direct ETH transfers not allowed");
     }
 }
