@@ -29,14 +29,14 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     mapping(address => bool) public maxRecipientsOverride;
 
     mapping(address => uint256) public lastUsed;
-    uint256 public rateLimitInterval = 1 minutes;
+    uint256 public rateLimitInterval = 60 seconds;
 
     mapping(address => bool) public blacklist;
     mapping(address => bool) public whitelistERC20;
     mapping(address => bool) public whitelistERC721;
     mapping(address => bool) public whitelistERC1155;
 
-    mapping(bytes32 => bool) private usedNonces;
+    mapping(address => mapping(bytes32 => bool)) private usedNonces;
 
     uint256 public constant gasLimitGlobal = 30000000;
     uint256 public gasLimitEth = 26000;
