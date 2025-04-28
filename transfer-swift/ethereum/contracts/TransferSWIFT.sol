@@ -160,19 +160,20 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
 
     // Rescue ETH when paused
     function rescueETH(address payable to) external onlyOwner whenPaused {
-    require(to != address(0), "Zero address");
-    require(
-        address(this).balance >= accumulatedRoyalties,
-        "Royalties exceed balance"
-    );
-    uint256 bal = address(this).balance - accumulatedRoyalties;
-    require(bal > 0, "Nothing to rescue");
-    emit ETHRescued(to, bal);
-    to.transfer(bal);
-}
+        require(to != address(0), "Zero address");
+        require(
+            address(this).balance >= accumulatedRoyalties,
+            "Royalties exceed balance"
+        );
+        uint256 bal = address(this).balance - accumulatedRoyalties;
+        require(bal > 0, "Nothing to rescue");
+        emit ETHRescued(to, bal);
+        to.transfer(bal);
+    }
 
     // Main multi-transfer function
     function multiTransfer(
+        uint256 initialBalance = address(this).balance;
         // ETH
         address[] calldata ethRecipients,
         uint256[] calldata ethAmounts,
@@ -304,7 +305,10 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
                 ""
             );
         }
-
+        uint256 remainingEth = address(this).balance - initialBalance;
+        if (remainingEth > 0) {
+            payable(msg.sender).transfer(remainingEth);
+        }
         emit MultiTransfer(
             msg.sender,
             ethRecipients.length,
