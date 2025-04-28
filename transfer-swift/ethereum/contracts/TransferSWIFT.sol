@@ -60,7 +60,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         lastUsed[msg.sender] = block.timestamp;
     }
 
-    constructor() {
+    constructor() payable {
         owner = msg.sender;
     }
 
