@@ -200,8 +200,8 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         lastUsed[msg.sender] = block.timestamp;
 
         // Nonce check
-        require(!usedNonces[nonce], "Nonce used");
-        usedNonces[nonce] = true;
+        require(!usedNonces[msg.sender][nonce], "Nonce used");
+        usedNonces[msg.sender][nonce] = true;
         emit NonceUsed(nonce);
 
         // Check recipients count
