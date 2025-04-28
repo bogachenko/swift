@@ -21,7 +21,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
 
     string public constant name = "TransferSWIFT";
     string public constant symbol = "SWIFT";
-
+    uint256 public constant maxTaxFee = 5e14; // 0.0005 ETH
     uint256 public constant checkTaxFee = 1e14; // 0.0001 ETH
     uint256 public taxFee = checkTaxFee;
 
@@ -68,6 +68,8 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     event Rescue(address indexed to, uint256 amount);
     event NonceUsed(bytes32 indexed nonce);
     event GasLimitTooHigh(string limitType);
+    event RoyaltiesWithdrawn(address indexed to, uint256 amount);
+    event ETHRescued(address indexed to, uint256 amount);
 
     modifier notBlacklisted(address account) {
         require(!blacklist[account], "Address blacklisted");
@@ -84,6 +86,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     // Owner functions
     function setTaxFee(uint256 _newFee) external onlyOwner {
         require(_newFee >= checkTaxFee, "Fee too low");
+        require(_newFee <= maxTaxFee, "Fee exceeds maximum");
         emit TaxFeeChanged(taxFee, _newFee);
         taxFee = _newFee;
     }
@@ -152,17 +155,21 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         require(amount > 0, "No royalties available");
         accumulatedRoyalties = 0;
         payable(owner()).transfer(amount);
-        emit Rescue(owner(), amount);
+        emit RoyaltiesWithdrawn(owner(), amount);
     }
 
     // Rescue ETH when paused
     function rescueETH(address payable to) external onlyOwner whenPaused {
-        require(to != address(0), "Zero address");
-        uint256 bal = address(this).balance - accumulatedRoyalties;
-        require(bal > 0, "Nothing to rescue");
-        emit Rescue(to, bal);
-        to.transfer(bal);
-    }
+    require(to != address(0), "Zero address");
+    require(
+        address(this).balance >= accumulatedRoyalties,
+        "Royalties exceed balance"
+    );
+    uint256 bal = address(this).balance - accumulatedRoyalties;
+    require(bal > 0, "Nothing to rescue");
+    emit ETHRescued(to, bal);
+    to.transfer(bal);
+}
 
     // Main multi-transfer function
     function multiTransfer(
