@@ -5,85 +5,262 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+// OpenZeppelin imports
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
-import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
-contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
-    using SafeERC20 for IERC20;
-    using Address for address;
+contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
+    using Address for address payable;
 
-    string public constant name = "TransferSWIFT";
-    string public constant symbol = "SWIFT";
-    uint256 public constant maxTaxFee = 5e14; // 0.0005 ETH
-    uint256 public constant checkTaxFee = 1e14; // 0.0001 ETH
-    uint256 public taxFee = checkTaxFee;
+    address public owner;
+    string public name = "TransferSWIFT";
+    string public symbol = "SWIFT";
+
+    uint256 public minTaxFee = 0.0001 ether;
+    uint256 public maxTaxFee = 0.0005 ether;
+    uint256 public taxFee = 0.0001 ether;
     uint256 public accumulatedRoyalties;
-    uint256 public rateLimitInterval = 60 seconds;
-    uint256 public defaultMaxRecipients = 15;
-    mapping(address => bool) public maxRecipientsOverride;
+
+    uint256 constant defaultRecipients = 15;
+    uint256 constant maxRecipients = 20;
+
     mapping(address => uint256) public lastUsed;
     mapping(address => bool) public blacklist;
+    mapping(address => bool) public extendedRecipients;
     mapping(address => bool) public whitelistERC20;
     mapping(address => bool) public whitelistERC721;
     mapping(address => bool) public whitelistERC1155;
-    mapping(address => uint256) public nonceCounter;
-    event MultiTransfer(
-        address indexed sender,
-        uint256 ethCount,
-        uint256 erc20Count,
-        uint256 erc721Count,
-        uint256 erc1155Count,
-        expectedNonce
-    );
-    event TaxFeeChanged(uint256 oldFee, uint256 newFee);
-    event MaxRecipientsGranted(address indexed account);
-    event RateLimitIntervalChanged(uint256 oldInterval, uint256 newInterval);
-    event BlacklistAdded(address indexed account);
-    event BlacklistRemoved(address indexed account);
-    event WhitelistERC20Added(address indexed token);
-    event WhitelistERC20Removed(address indexed token);
-    event WhitelistERC721Added(address indexed token);
-    event WhitelistERC721Removed(address indexed token);
-    event WhitelistERC1155Added(address indexed token);
-    event WhitelistERC1155Removed(address indexed token);
-    event RoyaltiesWithdrawn(address indexed to, uint256 amount);
-    event ETHRescued(address indexed to, uint256 amount);
 
-    modifier notBlacklisted(address account) {
-        require(!blacklist[account], "Address blacklisted");
+    event OwnershipTransferred(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
         _;
     }
 
-    constructor() payable Ownable(msg.sender) {}
-
-    function supportsInterface(
-        bytes4 interfaceId
-    ) external pure override returns (bool) {
-        return interfaceId == type(IERC165).interfaceId;
-    }
-    // Owner functions
-    function setTaxFee(uint256 _newFee) external onlyOwner {
-        require(_newFee >= checkTaxFee, "Fee too low");
-        require(_newFee <= maxTaxFee, "Fee exceeds maximum");
-        emit TaxFeeChanged(taxFee, _newFee);
-        taxFee = _newFee;
+    modifier notBlacklisted(address addr) {
+        require(!blacklist[addr], "Address blacklisted");
+        _;
     }
 
-    function setMaxRecipients(address account) external onlyOwner {
-        maxRecipientsOverride[account] = true;
-        emit MaxRecipientsGranted(account);
+    modifier enforceRateLimit() {
+        require(
+            block.timestamp >= lastUsed[msg.sender] + 60,
+            "Rate limit: Wait 60 seconds"
+        );
+        _;
+        lastUsed[msg.sender] = block.timestamp;
     }
 
-    function setRateLimitInterval(uint256 _interval) external onlyOwner {
-        emit RateLimitIntervalChanged(rateLimitInterval, _interval);
-        rateLimitInterval = _interval;
+    constructor() {
+        owner = msg.sender;
+    }
+
+    receive() external payable {}
+
+    // ================= Transfer Functions =================
+
+    function multiTransferETH(
+        address[] calldata recipients,
+        uint256[] calldata amounts
+    ) external payable nonReentrant enforceRateLimit whenNotPaused {
+        require(recipients.length == amounts.length, "Mismatched arrays");
+        uint256 allowedRecipients = extendedRecipients[msg.sender]
+            ? maxRecipients
+            : defaultRecipients;
+        require(recipients.length <= allowedRecipients, "Too many recipients");
+
+        uint256 totalAmount = 0;
+        for (uint256 i = 0; i < recipients.length; i++) {
+            require(recipients[i] != address(0), "Recipient is zero address");
+            require(!blacklist[recipients[i]], "Recipient blacklisted");
+            require(amounts[i] > 0, "Amount must be greater than 0");
+
+            totalAmount += amounts[i];
+        }
+
+        require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
+
+        accumulatedRoyalties += taxFee;
+
+        for (uint256 i = 0; i < recipients.length; i++) {
+            payable(recipients[i]).sendValue(amounts[i]);
+        }
+
+        uint256 refund = msg.value - totalAmount - taxFee;
+        if (refund > 0) {
+            payable(msg.sender).sendValue(refund);
+        }
+    }
+
+    function multiTransferERC20(
+        address token,
+        address[] calldata recipients,
+        uint256[] calldata amounts
+    ) external payable nonReentrant enforceRateLimit whenNotPaused {
+        require(whitelistERC20[token], "Token not whitelisted");
+        require(recipients.length == amounts.length, "Mismatched arrays");
+
+        uint256 allowedRecipients = extendedRecipients[msg.sender]
+            ? maxRecipients
+            : defaultRecipients;
+        require(recipients.length <= allowedRecipients, "Too many recipients");
+
+        IERC20 erc20 = IERC20(token);
+
+        accumulatedRoyalties += taxFee;
+        require(msg.value == taxFee, "Incorrect tax fee");
+
+        for (uint256 i = 0; i < recipients.length; i++) {
+            require(recipients[i] != address(0), "Recipient is zero address");
+            require(!blacklist[recipients[i]], "Recipient blacklisted");
+            require(amounts[i] > 0, "Amount must be greater than 0");
+
+            (bool success, bytes memory data) = address(erc20).call(
+                abi.encodeWithSelector(
+                    erc20.transferFrom.selector,
+                    msg.sender,
+                    recipients[i],
+                    amounts[i]
+                )
+            );
+            require(
+                success && (data.length == 0 || abi.decode(data, (bool))),
+                "ERC20 transfer failed"
+            );
+        }
+    }
+
+    function multiTransferERC721(
+        address token,
+        address[] calldata recipients,
+        uint256[] calldata tokenIds
+    ) external payable nonReentrant enforceRateLimit whenNotPaused {
+        require(whitelistERC721[token], "Token not whitelisted");
+        require(recipients.length == tokenIds.length, "Mismatched arrays");
+
+        uint256 allowedRecipients = extendedRecipients[msg.sender]
+            ? maxRecipients
+            : defaultRecipients;
+        require(recipients.length <= allowedRecipients, "Too many recipients");
+
+        IERC721 erc721 = IERC721(token);
+
+        accumulatedRoyalties += taxFee;
+        require(msg.value == taxFee, "Incorrect tax fee");
+
+        for (uint256 i = 0; i < recipients.length; i++) {
+            require(recipients[i] != address(0), "Recipient is zero address");
+            require(!blacklist[recipients[i]], "Recipient blacklisted");
+
+            require(
+                erc721.ownerOf(tokenIds[i]) == msg.sender,
+                "Not owner of tokenId"
+            );
+            erc721.safeTransferFrom(msg.sender, recipients[i], tokenIds[i]);
+        }
+    }
+
+    function multiTransferERC1155(
+        address token,
+        address[] calldata recipients,
+        uint256[] calldata ids,
+        uint256[] calldata amounts
+    ) external payable nonReentrant enforceRateLimit whenNotPaused {
+        require(whitelistERC1155[token], "Token not whitelisted");
+        require(
+            recipients.length == ids.length && ids.length == amounts.length,
+            "Mismatched arrays"
+        );
+
+        uint256 allowedRecipients = extendedRecipients[msg.sender]
+            ? maxRecipients
+            : defaultRecipients;
+        require(recipients.length <= allowedRecipients, "Too many recipients");
+
+        IERC1155 erc1155 = IERC1155(token);
+
+        accumulatedRoyalties += taxFee;
+        require(msg.value == taxFee, "Incorrect tax fee");
+
+        for (uint256 i = 0; i < recipients.length; i++) {
+            require(recipients[i] != address(0), "Recipient is zero address");
+            require(!blacklist[recipients[i]], "Recipient blacklisted");
+            require(amounts[i] > 0, "Amount must be greater than 0");
+
+            require(
+                erc1155.balanceOf(msg.sender, ids[i]) >= amounts[i],
+                "Not enough balance"
+            );
+            erc1155.safeTransferFrom(
+                msg.sender,
+                recipients[i],
+                ids[i],
+                amounts[i],
+                ""
+            );
+        }
+    }
+
+    // ================= Admin Functions =================
+
+    function setMaxRecipients(address user) external onlyOwner {
+        extendedRecipients[user] = true;
+    }
+
+    function addBlacklist(address user) external onlyOwner {
+        blacklist[user] = true;
+    }
+
+    function delBlacklist(address user) external onlyOwner {
+        blacklist[user] = false;
+    }
+
+    function addWhitelistERC20(address token) external onlyOwner {
+        whitelistERC20[token] = true;
+    }
+
+    function delWhitelistERC20(address token) external onlyOwner {
+        whitelistERC20[token] = false;
+    }
+
+    function addWhitelistERC721(address token) external onlyOwner {
+        whitelistERC721[token] = true;
+    }
+
+    function delWhitelistERC721(address token) external onlyOwner {
+        whitelistERC721[token] = false;
+    }
+
+    function addWhitelistERC1155(address token) external onlyOwner {
+        whitelistERC1155[token] = true;
+    }
+
+    function delWhitelistERC1155(address token) external onlyOwner {
+        whitelistERC1155[token] = false;
+    }
+
+    function setTaxFee(uint256 newFee) external onlyOwner {
+        require(
+            newFee >= minTaxFee && newFee <= maxTaxFee,
+            "Fee out of bounds"
+        );
+        taxFee = newFee;
+    }
+
+    function withdrawRoyalties() external onlyOwner nonReentrant {
+        uint256 amount = accumulatedRoyalties;
+        require(amount > 0, "No royalties");
+        accumulatedRoyalties = 0;
+        payable(owner).sendValue(amount);
     }
 
     function pause() external onlyOwner {
@@ -94,206 +271,15 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         _unpause();
     }
 
-    function addBlacklist(address account) external onlyOwner {
-        require(account != owner(), "Cannot blacklist owner");
-        blacklist[account] = true;
-        emit BlacklistAdded(account);
-    }
+    // ================= ERC165 Support =================
 
-    function delBlacklist(address account) external onlyOwner {
-        blacklist[account] = false;
-        emit BlacklistRemoved(account);
-    }
-
-    function addWhitelistERC20(address token) external onlyOwner {
-        whitelistERC20[token] = true;
-        emit WhitelistERC20Added(token);
-    }
-
-    function delWhitelistERC20(address token) external onlyOwner {
-        whitelistERC20[token] = false;
-        emit WhitelistERC20Removed(token);
-    }
-
-    function addWhitelistERC721(address token) external onlyOwner {
-        whitelistERC721[token] = true;
-        emit WhitelistERC721Added(token);
-    }
-
-    function delWhitelistERC721(address token) external onlyOwner {
-        whitelistERC721[token] = false;
-        emit WhitelistERC721Removed(token);
-    }
-
-    function addWhitelistERC1155(address token) external onlyOwner {
-        whitelistERC1155[token] = true;
-        emit WhitelistERC1155Added(token);
-    }
-
-    function delWhitelistERC1155(address token) external onlyOwner {
-        whitelistERC1155[token] = false;
-        emit WhitelistERC1155Removed(token);
-    }
-
-    function withdrawRoyalties() external onlyOwner nonReentrant {
-        uint256 amount = accumulatedRoyalties;
-        require(amount > 0, "No royalties available");
-        accumulatedRoyalties = 0;
-        payable(owner()).transfer(amount);
-        emit RoyaltiesWithdrawn(owner(), amount);
-    }
-
-    // Rescue ETH when paused
-    function rescueETH(address payable to) external onlyOwner whenPaused {
-        require(to != address(0), "Zero address");
-        require(
-            address(this).balance >= accumulatedRoyalties,
-            "Royalties exceed balance"
-        );
-        uint256 bal = address(this).balance - accumulatedRoyalties;
-        require(bal > 0, "Nothing to rescue");
-        emit ETHRescued(to, bal);
-        to.transfer(bal);
-    }
-
-    // Main multi-transfer function
-    function multiTransfer(
-        // ETH
-        address[] calldata ethRecipients,
-        uint256[] calldata ethAmounts,
-        // ERC-20
-        address[] calldata erc20Tokens,
-        address[] calldata erc20Recipients,
-        uint256[] calldata erc20Amounts,
-        // ERC-721
-        address[] calldata erc721Tokens,
-        address[] calldata erc721Recipients,
-        uint256[] calldata erc721Ids,
-        // ERC-1155
-        address[] calldata erc1155Tokens,
-        address[] calldata erc1155Recipients,
-        uint256[] calldata erc1155Ids,
-        uint256[] calldata erc1155Amounts,
-        // Anti-replay
-        uint256 expectedNonce
-    ) external payable nonReentrant whenNotPaused notBlacklisted(msg.sender) {
-        // Rate limit
-        require(
-            block.timestamp >= lastUsed[msg.sender] + rateLimitInterval,
-            "Rate limit"
-        );
-        lastUsed[msg.sender] = block.timestamp;
-
-        // Nonce check
-        require(nonceCounter[msg.sender] == expectedNonce, "Invalid nonce");
-        nonceCounter[msg.sender] += 1;
-
-        uint256 maxR = maxRecipientsOverride[msg.sender]
-            ? 20
-            : defaultMaxRecipients;
-        require(
-            ethRecipients.length <= maxR &&
-                erc20Recipients.length <= maxR &&
-                erc721Recipients.length <= maxR &&
-                erc1155Recipients.length <= maxR,
-            "Too many recipients"
-        );
-
-        // Collect needed ETH
-        uint256 totalEth = 0;
-        for (uint i = 0; i < ethAmounts.length; i++) {
-            require(ethRecipients[i] != address(0), "Zero address");
-            require(!blacklist[ethRecipients[i]], "Recipient blacklisted");
-            totalEth += ethAmounts[i];
-        }
-
-        require(msg.value >= totalEth + taxFee, "Insufficient ETH sent");
-        accumulatedRoyalties += taxFee;
-        if (msg.value > totalEth + taxFee) {
-            payable(msg.sender).transfer(msg.value - (totalEth + taxFee));
-        }
-
-        // Distribute ETH
-        for (uint i = 0; i < ethRecipients.length; i++) {
-            payable(ethRecipients[i]).transfer(ethAmounts[i]);
-        }
-
-        // ERC-20 transfers
-        require(
-            erc20Tokens.length == erc20Recipients.length &&
-                erc20Recipients.length == erc20Amounts.length,
-            "ERC20 array mismatch"
-        );
-        for (uint i = 0; i < erc20Recipients.length; i++) {
-            require(erc20Recipients[i] != address(0), "Zero address");
-            require(!blacklist[erc20Recipients[i]], "Recipient blacklisted");
-            require(whitelistERC20[erc20Tokens[i]], "ERC20 not whitelisted");
-            IERC20(erc20Tokens[i]).safeTransferFrom(
-                msg.sender,
-                erc20Recipients[i],
-                erc20Amounts[i]
-            );
-        }
-
-        // ERC-721 transfers
-        require(
-            erc721Tokens.length == erc721Recipients.length &&
-                erc721Recipients.length == erc721Ids.length,
-            "ERC721 array mismatch"
-        );
-        for (uint i = 0; i < erc721Recipients.length; i++) {
-            require(erc721Recipients[i] != address(0), "Zero address");
-            require(!blacklist[erc721Recipients[i]], "Recipient blacklisted");
-            require(whitelistERC721[erc721Tokens[i]], "ERC721 not whitelisted");
-            IERC721(erc721Tokens[i]).safeTransferFrom(
-                msg.sender,
-                erc721Recipients[i],
-                erc721Ids[i]
-            );
-        }
-
-        // ERC-1155 transfers
-        require(
-            erc1155Tokens.length == erc1155Recipients.length &&
-                erc1155Recipients.length == erc1155Ids.length &&
-                erc1155Ids.length == erc1155Amounts.length,
-            "ERC1155 array mismatch"
-        );
-        for (uint i = 0; i < erc1155Recipients.length; i++) {
-            require(erc1155Recipients[i] != address(0), "Zero address");
-            require(!blacklist[erc1155Recipients[i]], "Recipient blacklisted");
-            require(
-                whitelistERC1155[erc1155Tokens[i]],
-                "ERC1155 not whitelisted"
-            );
-            IERC1155(erc1155Tokens[i]).safeTransferFrom(
-                msg.sender,
-                erc1155Recipients[i],
-                erc1155Ids[i],
-                erc1155Amounts[i],
-                ""
-            );
-        }
-        uint256 excess = msg.value - (totalEth + taxFee);
-        if (excess > 0) {
-            payable(msg.sender).transfer(excess);
-        }
-        emit MultiTransfer(
-            msg.sender,
-            ethRecipients.length,
-            erc20Recipients.length,
-            erc721Recipients.length,
-            erc1155Recipients.length,
-            expectedNonce
-        );
-    }
-
-    // Fallback reject other tokens
-    receive() external payable {
-        revert("Direct ETH transfers not allowed");
-    }
-
-    fallback() external payable {
-        revert("Direct ETH transfers not allowed");
+    function supportsInterface(
+        bytes4 interfaceId
+    ) public view virtual override returns (bool) {
+        return
+            interfaceId == type(IERC20).interfaceId ||
+            interfaceId == type(IERC721).interfaceId ||
+            interfaceId == type(IERC1155).interfaceId ||
+            interfaceId == type(ERC165).interfaceId;
     }
 }
