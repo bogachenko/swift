@@ -1,6 +1,6 @@
 // TransferSWIFT <https://github.com/bogachenko/swift>
 // License: MIT
-// Version 0.0.0.3 (unstable)
+// Version 0.0.0.4 (unstable)
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -24,35 +24,23 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     uint256 public constant maxTaxFee = 5e14; // 0.0005 ETH
     uint256 public constant checkTaxFee = 1e14; // 0.0001 ETH
     uint256 public taxFee = checkTaxFee;
-
+    uint256 public accumulatedRoyalties;
+    uint256 public rateLimitInterval = 60 seconds;
     uint256 public defaultMaxRecipients = 15;
     mapping(address => bool) public maxRecipientsOverride;
-
     mapping(address => uint256) public lastUsed;
-    uint256 public rateLimitInterval = 60 seconds;
-
     mapping(address => bool) public blacklist;
     mapping(address => bool) public whitelistERC20;
     mapping(address => bool) public whitelistERC721;
     mapping(address => bool) public whitelistERC1155;
-
-    mapping(address => mapping(bytes32 => bool)) private usedNonces;
-
-    uint256 public constant gasLimitGlobal = 30000000;
-    uint256 public gasLimitEth = 26000;
-    uint256 public gasLimitErc20 = 70000;
-    uint256 public gasLimitErc721 = 105000;
-    uint256 public gasLimitErc1155 = 72000;
-
-    uint256 public accumulatedRoyalties;
-
+    mapping(address => uint256) public nonceCounter;
     event MultiTransfer(
         address indexed sender,
         uint256 ethCount,
         uint256 erc20Count,
         uint256 erc721Count,
         uint256 erc1155Count,
-        bytes32 nonce
+        expectedNonce
     );
     event TaxFeeChanged(uint256 oldFee, uint256 newFee);
     event MaxRecipientsGranted(address indexed account);
@@ -65,8 +53,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     event WhitelistERC721Removed(address indexed token);
     event WhitelistERC1155Added(address indexed token);
     event WhitelistERC1155Removed(address indexed token);
-    event NonceUsed(bytes32 indexed nonce);
-    event GasLimitTooHigh(string limitType);
     event RoyaltiesWithdrawn(address indexed to, uint256 amount);
     event ETHRescued(address indexed to, uint256 amount);
 
@@ -189,9 +175,8 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         uint256[] calldata erc1155Ids,
         uint256[] calldata erc1155Amounts,
         // Anti-replay
-        bytes32 nonce
+        uint256 expectedNonce
     ) external payable nonReentrant whenNotPaused notBlacklisted(msg.sender) {
-        uint256 initialBalance = address(this).balance;
         // Rate limit
         require(
             block.timestamp >= lastUsed[msg.sender] + rateLimitInterval,
@@ -200,12 +185,8 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         lastUsed[msg.sender] = block.timestamp;
 
         // Nonce check
-        require(!usedNonces[msg.sender][nonce], "Nonce used");
-        usedNonces[msg.sender][nonce] = true;
-        emit NonceUsed(nonce);
-
-        // Check recipients count
-        require(gasleft() <= gasLimitGlobal, "Global gas limit exceeded");
+        require(nonceCounter[msg.sender] == expectedNonce, "Invalid nonce");
+        nonceCounter[msg.sender] += 1;
 
         uint256 maxR = maxRecipientsOverride[msg.sender]
             ? 20
@@ -223,7 +204,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         for (uint i = 0; i < ethAmounts.length; i++) {
             require(ethRecipients[i] != address(0), "Zero address");
             require(!blacklist[ethRecipients[i]], "Recipient blacklisted");
-            require(gasleft() <= gasLimitEth, "ETH gas limit");
             totalEth += ethAmounts[i];
         }
 
@@ -245,7 +225,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
             "ERC20 array mismatch"
         );
         for (uint i = 0; i < erc20Recipients.length; i++) {
-            require(gasleft() <= gasLimitErc20, "ERC20 gas limit");
             require(erc20Recipients[i] != address(0), "Zero address");
             require(!blacklist[erc20Recipients[i]], "Recipient blacklisted");
             require(whitelistERC20[erc20Tokens[i]], "ERC20 not whitelisted");
@@ -263,7 +242,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
             "ERC721 array mismatch"
         );
         for (uint i = 0; i < erc721Recipients.length; i++) {
-            require(gasleft() <= gasLimitErc721, "ERC721 gas limit");
             require(erc721Recipients[i] != address(0), "Zero address");
             require(!blacklist[erc721Recipients[i]], "Recipient blacklisted");
             require(whitelistERC721[erc721Tokens[i]], "ERC721 not whitelisted");
@@ -282,7 +260,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
             "ERC1155 array mismatch"
         );
         for (uint i = 0; i < erc1155Recipients.length; i++) {
-            require(gasleft() <= gasLimitErc1155, "ERC1155 gas limit");
             require(erc1155Recipients[i] != address(0), "Zero address");
             require(!blacklist[erc1155Recipients[i]], "Recipient blacklisted");
             require(
@@ -297,9 +274,9 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
                 ""
             );
         }
-        uint256 remainingEth = address(this).balance - initialBalance;
-        if (remainingEth > 0) {
-            payable(msg.sender).transfer(remainingEth);
+        uint256 excess = msg.value - (totalEth + taxFee);
+        if (excess > 0) {
+            payable(msg.sender).transfer(excess);
         }
         emit MultiTransfer(
             msg.sender,
@@ -307,7 +284,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
             erc20Recipients.length,
             erc721Recipients.length,
             erc1155Recipients.length,
-            nonce
+            expectedNonce
         );
     }
 
