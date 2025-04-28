@@ -205,10 +205,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         emit NonceUsed(nonce);
 
         // Check recipients count
-        if (gasleft() > gasLimitGlobal) {
-            emit GasLimitTooHigh("global");
-            revert("Global gas limit too high");
-        }
+        require(gasleft() <= gasLimitGlobal, "Global gas limit exceeded");
 
         uint256 maxR = maxRecipientsOverride[msg.sender]
             ? 20
@@ -226,7 +223,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         for (uint i = 0; i < ethAmounts.length; i++) {
             require(ethRecipients[i] != address(0), "Zero address");
             require(!blacklist[ethRecipients[i]], "Recipient blacklisted");
-            require(gasleft() >= gasLimitEth, "ETH gas limit");
+            require(gasleft() <= gasLimitEth, "ETH gas limit");
             totalEth += ethAmounts[i];
         }
 
@@ -248,7 +245,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
             "ERC20 array mismatch"
         );
         for (uint i = 0; i < erc20Recipients.length; i++) {
-            require(gasleft() >= gasLimitErc20, "ERC20 gas limit");
+            require(gasleft() <= gasLimitErc20, "ERC20 gas limit");
             require(erc20Recipients[i] != address(0), "Zero address");
             require(!blacklist[erc20Recipients[i]], "Recipient blacklisted");
             require(whitelistERC20[erc20Tokens[i]], "ERC20 not whitelisted");
@@ -266,7 +263,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
             "ERC721 array mismatch"
         );
         for (uint i = 0; i < erc721Recipients.length; i++) {
-            require(gasleft() >= gasLimitErc721, "ERC721 gas limit");
+            require(gasleft() <= gasLimitErc721, "ERC721 gas limit");
             require(erc721Recipients[i] != address(0), "Zero address");
             require(!blacklist[erc721Recipients[i]], "Recipient blacklisted");
             require(whitelistERC721[erc721Tokens[i]], "ERC721 not whitelisted");
@@ -285,7 +282,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
             "ERC1155 array mismatch"
         );
         for (uint i = 0; i < erc1155Recipients.length; i++) {
-            require(gasleft() >= gasLimitErc1155, "ERC1155 gas limit");
+            require(gasleft() <= gasLimitErc1155, "ERC1155 gas limit");
             require(erc1155Recipients[i] != address(0), "Zero address");
             require(!blacklist[erc1155Recipients[i]], "Recipient blacklisted");
             require(
