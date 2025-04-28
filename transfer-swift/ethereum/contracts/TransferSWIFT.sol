@@ -65,7 +65,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
     event WhitelistERC721Removed(address indexed token);
     event WhitelistERC1155Added(address indexed token);
     event WhitelistERC1155Removed(address indexed token);
-    event Rescue(address indexed to, uint256 amount);
     event NonceUsed(bytes32 indexed nonce);
     event GasLimitTooHigh(string limitType);
     event RoyaltiesWithdrawn(address indexed to, uint256 amount);
@@ -173,7 +172,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
 
     // Main multi-transfer function
     function multiTransfer(
-        uint256 initialBalance = address(this).balance;
         // ETH
         address[] calldata ethRecipients,
         uint256[] calldata ethAmounts,
@@ -193,6 +191,7 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         // Anti-replay
         bytes32 nonce
     ) external payable nonReentrant whenNotPaused notBlacklisted(msg.sender) {
+        uint256 initialBalance = address(this).balance;
         // Rate limit
         require(
             block.timestamp >= lastUsed[msg.sender] + rateLimitInterval,
@@ -206,10 +205,6 @@ contract TransferSWIFT is Ownable, Pausable, ReentrancyGuard, IERC165 {
         emit NonceUsed(nonce);
 
         // Check recipients count
-        uint256 totalOps = ethRecipients.length +
-            erc20Recipients.length +
-            erc721Recipients.length +
-            erc1155Recipients.length;
         if (gasleft() > gasLimitGlobal) {
             emit GasLimitTooHigh("global");
             revert("Global gas limit too high");
