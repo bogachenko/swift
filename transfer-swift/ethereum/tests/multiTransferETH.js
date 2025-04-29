@@ -4,48 +4,93 @@ const hre = require("hardhat"),
 		ethers: ethers
 	} = require("hardhat");
 async function main() {
-	const e = hre.network.name.toUpperCase();
-	console.log(`\nNetwork: ${e}`);
-	const a = getContractAddress(e);
-	if(!a) throw new Error(`Contract address for ${e} not set in .env`);
-	const r = ["0x1111111111111111111111111111111111111111", "0x2222222222222222222222222222222222222222", "0x3333333333333333333333333333333333333333",
-			"0x4444444444444444444444444444444444444444", "0x5555555555555555555555555555555555555555", "0x6666666666666666666666666666666666666666",
-			"0x7777777777777777777777777777777777777777", "0x8888888888888888888888888888888888888888", "0x9999999999999999999999999999999999999999",
-			"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0xcccccccccccccccccccccccccccccccccccccccc",
-			"0xdddddddddddddddddddddddddddddddddddddddd", "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "0xffffffffffffffffffffffffffffffffffffffff",
-			"0x1234567890123456789012345678901234567890", "0x0123456789012345678901234567890123456789", "0xdEAD000000000000000042069420694206942069",
-			"0x000000000000000000000000000000000000dEaD", "0x00000000000000000000045261D4Ee77acdb3286"
-		],
-		o = ethers.parseUnits("1", "wei"),
+	const e = hre.network.name.toUpperCase(),
+		a = process.env[`${e}_CONTRACT_ADDRESS`];
+	if(!a || !/^0x[a-fA-F0-9]{40}$/.test(a)) throw new Error(`Invalid contract address for ${e}`);
+	const r = [{
+			address: "0x1111111111111111111111111111111111111111",
+			amount: "1"
+		}, {
+			address: "0x2222222222222222222222222222222222222222",
+			amount: "1000000000000000000"
+		}, {
+			address: "0x3333333333333333333333333333333333333333",
+			amount: "6000000000"
+		}, {
+			address: "0x4444444444444444444444444444444444444444",
+			amount: "1000000000"
+		}, {
+			address: "0x5555555555555555555555555555555555555555",
+			amount: "1000000"
+		}, {
+			address: "0x6666666666666666666666666666666666666666",
+			amount: "20"
+		}, {
+			address: "0x7777777777777777777777777777777777777777",
+			amount: "1000000"
+		}, {
+			address: "0x8888888888888888888888888888888888888888",
+			amount: "1000000"
+		}, {
+			address: "0x9999999999999999999999999999999999999999",
+			amount: "530000"
+		}, {
+			address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			amount: "1000000"
+		}, {
+			address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			amount: "1000000"
+		}, {
+			address: "0xcccccccccccccccccccccccccccccccccccccccc",
+			amount: "1000000"
+		}, {
+			address: "0xdddddddddddddddddddddddddddddddddddddddd",
+			amount: "1000000"
+		}, {
+			address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			amount: "1000000"
+		}, {
+			address: "0xffffffffffffffffffffffffffffffffffffffff",
+			amount: "1000000000000000"
+		}, {
+			address: "0x1234567890123456789012345678901234567890",
+			amount: "500000"
+		}, {
+			address: "0x0123456789012345678901234567890123456789",
+			amount: "1000000000"
+		}, {
+			address: "0xdEAD000000000000000042069420694206942069",
+			amount: "1000000"
+		}, {
+			address: "0x000000000000000000000000000000000000dEaD",
+			amount: "1000000"
+		}, {
+			address: "0x00000000000000000000045261D4Ee77acdb3286",
+			amount: "7000000000"
+		}],
+		s = r.map((e => e.address)),
+		d = r.map((e => ethers.parseUnits(e.amount, "wei"))),
 		t = await ethers.getContractAt("TransferSWIFT", a),
-		[c] = await ethers.getSigners(),
-		n = await t.taxFee();
-	if(0n === n) throw new Error("Tax fee is not set (zero value)");
-	if(await t.blacklist(c.address)) throw new Error("Sender is blacklisted");
-	for(const e of r)
-		if(await t.blacklist(e)) throw new Error(`Recipient ${e} is blacklisted`);
-	const s = await t.extendedRecipients(c.address) ? 20 : 15;
-	if(console.log(`Recipient limit: ${s}`), r.length > s) throw new Error(`Too many recipients (${r.length} > ${s})`);
-	const d = o * BigInt(r.length),
-		f = d + n,
-		i = await ethers.provider.getBalance(c.address);
-	if(console.log(`\nSender: ${c.address}`), console.log(`Tax Fee: ${ethers.formatEther(n)} ETH`), console.log(`Value: ${ethers.formatEther(d)} ETH`),
-		console.log(`Required: ${ethers.formatEther(f)} ETH`), console.log(`Balance: ${ethers.formatEther(i)} ETH`), i < f) throw new Error(
-		"Insufficient balance");
+		[n] = await ethers.getSigners(),
+		o = await t.taxFee();
+	if(await t.blacklist(n.address)) throw new Error("Sender blacklisted");
+	for(const e of s)
+		if(await t.blacklist(e)) throw new Error(`Recipient ${e} blacklisted`);
+	const c = await t.extendedRecipients(n.address) ? 20 : 15;
+	if(console.log(`\nNetwork: ${e}\nSender: ${n.address}\nContract: ${a}\nRecipient limit: ${c}`), s.length > c) throw new Error(`Too many recipients (${s.length} > ${c})`);
+	const f = d.reduce(((e, a) => e + a), 0n),
+		i = f + o,
+		b = await ethers.provider.getBalance(n.address);
+	if(console.log("\nRecipients:"), r.forEach(((e, a) => {
+			console.log(`Transfer ${ethers.formatEther(d[a])} ETH → ${e.address}`)
+		})), console.log(`\nTax Fee: ${ethers.formatEther(o)} ETH`), console.log(`Total value: ${ethers.formatEther(f)} ETH`), console.log(`Required (value + tax): ${ethers.formatEther(i)} ETH`), console.log(`Balance: ${ethers.formatEther(b)} ETH`), b < i) throw new Error("Insufficient balance");
 	console.log("\nSending transaction...");
-	const l = await t.multiTransferETH(r, new Array(r.length).fill(o), {
-		value: f
-	});
-	console.log("Waiting for confirmation...");
-	const b = await l.wait();
-	console.log("\nTransaction confirmed!"), console.log(`Block: ${b.blockNumber}`), console.log(`Transaction Hash: ${l.hash}`), console.log(
-		`Gas used: ${b.gasUsed.toString()}`), console.log(`Transaction fee: ${ethers.formatEther(b.gasUsed*l.gasPrice)} ETH`)
-}
-
-function getContractAddress(e) {
-	return process.env[`${e}_CONTRACT_ADDRESS`]
+	const l = await t.multiTransferETH(s, d, {
+			value: i
+		}),
+		m = await l.wait();
+	console.log(`\nTransaction confirmed!\nBlock: ${m.blockNumber}\nHash: ${l.hash}\nGas used: ${m.gasUsed}\nFee: ${ethers.formatEther(m.gasUsed*l.gasPrice)} ETH`)
 }
 main().catch((e => {
-	console.error("\nError:", e.message),
-		process.exit(1)
+	console.error("\nError:", e.message), process.exit(1)
 }));
