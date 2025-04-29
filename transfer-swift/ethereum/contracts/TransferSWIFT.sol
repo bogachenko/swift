@@ -59,13 +59,39 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
 
     // Events
     /// @notice Ownership transfer event
+    /// @dev Generates an event indicating successful transfer of ownership
     /// @param previousOwner Previous owner address
     /// @param newOwner New owner address
     event OwnershipTransferred(
         address indexed previousOwner,
         address indexed newOwner
     );
+    // @notice Royalty withdrawal event
+    // @dev Generates an event when the accumulated commissions have been successfully withdrawn
+    // @param receiver Recipient address (always current owner)
+    // @param amount Withdrawal amount in wei
+    event RoyaltiesWithdrawn(
+        address indexed receiver, uint256 amount
+    );
+    /// @notice funds withdrawal event
+    /// @dev Generates an event when the accumulated funds have been successfully withdrawn
+    /// @param receiver Recipient address (always current owner)
+    /// @param amount Withdrawal amount in wei
+    event FundsWithdrawn(
+        address indexed receiver, uint256 amount
+    );
+    /// @notice Recipient limit change event
+    /// @dev Allows an extended recipient limit for the specified user
+    event MaxRecipientsSet(
+        address indexed user, uint256 limit
+    );
+    /// @notice Recipient limit reset event
+    /// @dev Restores the standard recipient limit for the specified user
+    event DefaultRecipientsSet(
+        address indexed user, uint256 limit
+    );
 
+    // Modifiers
     /// @notice Restricts the function call to the owner
     /// @dev Checks if the sender's address matches the owner
     modifier onlyOwner() {
@@ -224,15 +250,23 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         }
     }
 
+    // Variables
     /// @notice Custom value of the rate limit
     /// @dev Establishing a custom time limit for accessing the contract
     function setRateLimit(uint256 newDuration) external onlyOwner {
     rateLimitDuration = newDuration;
     }
     /// @notice Custom extended recipient lists
-    /// @dev Establishing either the default 15 or the extended 20 positions for sending
+    /// @dev Setting permissions from standard 15 on extended 20 positions
     function setMaxRecipients(address user) external onlyOwner {
         extendedRecipients[user] = true;
+        emit MaxRecipientsSet(user, maxRecipients);
+    }
+    /// @notice Custom default recipient lists
+    /// @dev Setting permissions from extended 20 on standard 15 positions
+    function setDefaultRecipients(address user) external onlyOwner {
+        extendedRecipients[user] = false;
+        emit DefaultRecipientsSet(user, defaultRecipients);
     }
     /// @notice Formation of the blacklist
     /// @dev Adding an address to the blacklist
@@ -310,12 +344,21 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(amount > 0, "No royalties");
         accumulatedRoyalties = 0;
         payable(owner).sendValue(amount);
+        emit RoyaltiesWithdrawn(owner, amount);
     }
-    /// @notice Pauses all transfer operations
+    /// @notice Withdraws accumulated funds to owner
+    /// @dev Withdraws funds only
+    function withdrawFunds() external onlyOwner nonReentrant {
+        uint256 availableBalance = address(this).balance - accumulatedRoyalties;
+        require(availableBalance > 0, "No available funds");
+        payable(owner).sendValue(availableBalance);
+        emit FundsWithdrawn(owner, availableBalance);
+    }
+    /// @notice Pauses the contract
     function pause() external onlyOwner {
         _pause();
     }
-    /// @notice Resumes all transfer operations
+    /// @notice Unpauses the contract
     function unpause() external onlyOwner {
         _unpause();
     }
