@@ -1,11 +1,7 @@
-// TransferSWIFT <https://github.com/bogachenko/swift>
-// License: MIT
-// Version 0.0.0.5 (unstable)
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// OpenZeppelin imports
+// @openzeppelin/contracts: Import libraries
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
@@ -14,49 +10,96 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
+/// @title TransferSWIFT
+/// @author Bogachenko Vyacheslav
+/// @notice TransferSWIFT is a universal contract for batch transfers of native coins and tokens.
+/// @custom:licence License: MIT
+/// @custom:version Version 0.0.0.6 (unstable)
+
 contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
+    // Configuration data
+    /// @notice Safe ETH operations
     using Address for address payable;
+    /// @notice Contract owner address
     address public owner;
+    /// @notice Transfer of ownership
+    address public pendingOwner;
+    /// @notice Protocol display name
     string public name = "TransferSWIFT";
+    /// @notice Protocol symbol
     string public symbol = "SWIFT";
-    uint256 public minTaxFee = 1e11; // 0.0005 ETH
-    uint256 public maxTaxFee = 5e14; // 0.0005 ETH
-    uint256 public taxFee = 1e14; // 0.0001 ETH
+    /// @notice Current transaction fee (0.0001 ETH)
+    uint256 public taxFee = 1e14;
+    /// @notice Minimum allowed fee (0.000001 ETH)
+    uint256 public minTaxFee = 1e12;
+    /// @notice Maximum allowed fee (0.0005 ETH)
+    uint256 public maxTaxFee = 5e14;
+    /// @notice Accumulated protocol fees
     uint256 public accumulatedRoyalties;
+    /// @notice Standard number of allowed recipients
     uint256 constant defaultRecipients = 15;
+    /// @notice Maximum number of allowed recipients
     uint256 constant maxRecipients = 20;
+    /// @notice Cooldown of rate limiting (5 minutes)
+    uint256 public rateLimitDuration = 300;
+
+    // Security mappings
+    /// @notice Rate limiting
     mapping(address => uint256) public lastUsed;
+    /// @notice Blacklisted addresses
     mapping(address => bool) public blacklist;
+    /// @notice Addresses with extended recipient limits
     mapping(address => bool) public extendedRecipients;
+    /// @notice Approved ERC20 tokens
     mapping(address => bool) public whitelistERC20;
+    /// @notice Approved ERC721 tokens
     mapping(address => bool) public whitelistERC721;
+    /// @notice Approved ERC1155 tokens
     mapping(address => bool) public whitelistERC1155;
 
+    // Events
+    /// @notice Ownership transfer event
+    /// @param previousOwner Previous owner address
+    /// @param newOwner New owner address
     event OwnershipTransferred(
         address indexed previousOwner,
         address indexed newOwner
     );
+
+    /// @notice Restricts the function call to the owner
+    /// @dev Checks if the sender's address matches the owner
     modifier onlyOwner() {
         require(msg.sender == owner, "Not owner");
         _;
     }
+    /// @notice Blacklist search
+    /// @dev Checking an address in the blacklist
     modifier notBlacklisted(address addr) {
         require(!blacklist[addr], "Address blacklisted");
         _;
     }
+    /// @notice Rate limit
+    /// @dev Enforces cooldown between transactions
     modifier enforceRateLimit() {
         require(
-            block.timestamp >= lastUsed[msg.sender] + 60,
-            "Rate limit: Wait 60 seconds"
+            block.timestamp >= lastUsed[msg.sender] + rateLimitDuration,
+            "Rate limit: Wait cooldown period"
         );
         _;
         lastUsed[msg.sender] = block.timestamp;
     }
+
+    /// @notice Contract assembly
+    /// @dev Sets msg.sender as the initial owner
+    /// @dev Marked as payable to allow deployment with initial ETH balance
     constructor() payable {
         owner = msg.sender;
     }
+    /// @dev Recipient function for incoming ETH transactions
     receive() external payable {}
 
+    /// @notice Multitransfer for ETH (native coin)
+    /// @dev Performs mass distribution of ETH (native coin) to several recipients
     function multiTransferETH(
         address[] calldata recipients,
         uint256[] calldata amounts
@@ -83,7 +126,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             payable(msg.sender).sendValue(refund);
         }
     }
-
+    /// @notice Multitransfer for ERC20 token standard
+    /// @dev Performs mass distribution of ERC20 token to several recipients
     function multiTransferERC20(
         address token,
         address[] calldata recipients,
@@ -116,7 +160,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             );
         }
     }
-
+    /// @notice Multitransfer for ERC721 token standard
+    /// @dev Performs mass distribution of ERC721 token to several recipients
     function multiTransferERC721(
         address token,
         address[] calldata recipients,
@@ -141,7 +186,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             erc721.safeTransferFrom(msg.sender, recipients[i], tokenIds[i]);
         }
     }
-
+    /// @notice Multitransfer for ERC1155 token standard
+    /// @dev Performs mass distribution of ERC1155 token to several recipients
     function multiTransferERC1155(
         address token,
         address[] calldata recipients,
@@ -178,33 +224,78 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         }
     }
 
+    /// @notice Custom value of the rate limit
+    /// @dev Establishing a custom time limit for accessing the contract
+    function setRateLimit(uint256 newDuration) external onlyOwner {
+    rateLimitDuration = newDuration;
+    }
+    /// @notice Custom extended recipient lists
+    /// @dev Establishing either the default 15 or the extended 20 positions for sending
     function setMaxRecipients(address user) external onlyOwner {
         extendedRecipients[user] = true;
     }
+    /// @notice Formation of the blacklist
+    /// @dev Adding an address to the blacklist
     function addBlacklist(address user) external onlyOwner {
         blacklist[user] = true;
     }
+    /// @notice Abolition of the blacklist
+    /// @dev Removing an address from the blacklist
     function delBlacklist(address user) external onlyOwner {
         blacklist[user] = false;
     }
+    /// @notice Formation of the whitelist for ERC20 token standard
+    /// @dev Adding an address to the whitelist for ERC20 token standard
     function addWhitelistERC20(address token) external onlyOwner {
         whitelistERC20[token] = true;
     }
+    /// @notice Abolition of the whitelist for ERC20 token standard
+    /// @dev Removing an address from the whitelist for ERC20 token standard
     function delWhitelistERC20(address token) external onlyOwner {
         whitelistERC20[token] = false;
     }
+    /// @notice Formation of the whitelist for ERC721 token standard
+    /// @dev Adding an address to the whitelist for ERC721 token standard
     function addWhitelistERC721(address token) external onlyOwner {
         whitelistERC721[token] = true;
     }
+    /// @notice Abolition of the whitelist for ERC721 token standard
+    /// dev Removing an address from the whitelist for ERC721 token standard
     function delWhitelistERC721(address token) external onlyOwner {
         whitelistERC721[token] = false;
     }
+    /// @notice Formation of the whitelist for ERC1155 token standard
+    /// @dev Adding an address to the whitelist for ERC1155 token standard
     function addWhitelistERC1155(address token) external onlyOwner {
         whitelistERC1155[token] = true;
     }
+    /// @notice Abolition of the whitelist for ERC1155 token standard
+    /// @dev Removing an address from the whitelist for ERC1155 token standard
     function delWhitelistERC1155(address token) external onlyOwner {
         whitelistERC1155[token] = false;
     }
+    /// @notice Initiates a two-step ownership transfer process
+    /// @dev Sets the pending owner address which can later claim ownership
+    function transferOwnership(address newOwner) external onlyOwner {
+        pendingOwner = newOwner;
+    }
+    /// @notice Completes ownership transfer process
+    /// @dev Allows pending owner to finalize the ownership transfer
+    function acceptOwnership() external {
+        require(msg.sender == pendingOwner, "Not pending owner");
+        emit OwnershipTransferred(owner, msg.sender);
+        owner = msg.sender;
+        pendingOwner = address(0);
+    }
+    /// @notice Permanently renounces contract ownership
+    /// @dev Sets the contract owner to address zero
+    function renounceOwnership() external onlyOwner {
+        pendingOwner = address(0);
+        emit OwnershipTransferred(owner, address(0));
+        owner = address(0);
+    }
+    /// @notice Establishing the transaction fee amount
+    /// @dev The new fee must be within predefined min/max bounds
     function setTaxFee(uint256 newFee) external onlyOwner {
         require(
             newFee >= minTaxFee && newFee <= maxTaxFee,
@@ -212,18 +303,23 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         );
         taxFee = newFee;
     }
+    /// @notice Withdraws accumulated royalty fees to owner
+    /// @dev Withdraws commission funds only
     function withdrawRoyalties() external onlyOwner nonReentrant {
         uint256 amount = accumulatedRoyalties;
         require(amount > 0, "No royalties");
         accumulatedRoyalties = 0;
         payable(owner).sendValue(amount);
     }
+    /// @notice Pauses all transfer operations
     function pause() external onlyOwner {
         _pause();
     }
+    /// @notice Resumes all transfer operations
     function unpause() external onlyOwner {
         _unpause();
     }
+    /// @notice ERC165 interface support check
     function supportsInterface(
         bytes4 interfaceId
     ) public view virtual override returns (bool) {
