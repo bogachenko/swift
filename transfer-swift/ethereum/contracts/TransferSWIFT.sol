@@ -44,6 +44,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     uint256 public rateLimitDuration = 300;
     //// @notice The emergency stop flag of the contract
     bool public isEmergencyStopped;
+    bool private _wasPausedBeforeEmergency;
     /// @notice The reason for activating the emergency mode
     string public emergencyReason;
 
@@ -73,39 +74,36 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Emergency mode activation event
     /// @param executor Activator's address
     /// @param reason Reason for activation
-    event EmergencyStopActivated(
-        address indexed executor,
-        string reason
-    );
+    event EmergencyStopActivated(address indexed executor, string reason);
     /// @notice Emergency mode deactivation event
     /// @param executor Deactivator address
-    event EmergencyStopLifted(
-        address indexed executor
-    );
+    event EmergencyStopLifted(address indexed executor);
     // @notice Royalty withdrawal event
     // @dev Generates an event when the accumulated commissions have been successfully withdrawn
     // @param receiver Recipient address (always current owner)
     // @param amount Withdrawal amount in wei
-    event RoyaltiesWithdrawn(
-        address indexed receiver, uint256 amount
-    );
+    event RoyaltiesWithdrawn(address indexed receiver, uint256 amount);
     /// @notice funds withdrawal event
     /// @dev Generates an event when the accumulated funds have been successfully withdrawn
     /// @param receiver Recipient address (always current owner)
     /// @param amount Withdrawal amount in wei
-    event FundsWithdrawn(
-        address indexed receiver, uint256 amount
-    );
+    event FundsWithdrawn(address indexed receiver, uint256 amount);
     /// @notice Recipient limit change event
     /// @dev Allows an extended recipient limit for the specified user
-    event MaxRecipientsSet(
-        address indexed user, uint256 limit
-    );
+    event MaxRecipientsSet(address indexed user, uint256 limit);
     /// @notice Recipient limit reset event
     /// @dev Restores the standard recipient limit for the specified user
-    event DefaultRecipientsSet(
-        address indexed user, uint256 limit
-    );
+    event DefaultRecipientsSet(address indexed user, uint256 limit);
+    /// @notice Blacklist status change event
+    /// @param user User's address
+    /// @param status New status (true = added to blacklist/false = deleted from blacklist)
+    event BlacklistUpdated(address indexed user, bool status);
+    /// @notice Whitelist status change event
+    /// @param user User's address
+    /// @param status New status (true = added to whitelist/false = deleted from whitelist)
+    event WhitelistERC20Updated(address indexed token, bool status);
+    event WhitelistERC721Updated(address indexed token, bool status);
+    event WhitelistERC1155Updated(address indexed token, bool status);
 
     // Modifiers
     /// @notice Restricts the function call to the owner
@@ -133,8 +131,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Active emergency mode
     /// @dev Prevents functions from being executed when emergency stop is activated
     modifier emergencyNotActive() {
-    require(!isEmergencyStopped, "Emergency stop active");
-    _;
+        require(!isEmergencyStopped, "Emergency stop active");
+        _;
     }
 
     /// @notice Contract assembly
@@ -151,7 +149,14 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     function multiTransferETH(
         address[] calldata recipients,
         uint256[] calldata amounts
-    ) external payable nonReentrant enforceRateLimit whenNotPaused emergencyNotActive {
+    )
+        external
+        payable
+        nonReentrant
+        enforceRateLimit
+        whenNotPaused
+        emergencyNotActive
+    {
         require(recipients.length == amounts.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
@@ -180,7 +185,14 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         address token,
         address[] calldata recipients,
         uint256[] calldata amounts
-    ) external payable nonReentrant enforceRateLimit whenNotPaused emergencyNotActive {
+    )
+        external
+        payable
+        nonReentrant
+        enforceRateLimit
+        whenNotPaused
+        emergencyNotActive
+    {
         require(whitelistERC20[token], "Token not whitelisted");
         require(recipients.length == amounts.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
@@ -214,7 +226,14 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         address token,
         address[] calldata recipients,
         uint256[] calldata tokenIds
-    ) external payable nonReentrant enforceRateLimit whenNotPaused emergencyNotActive {
+    )
+        external
+        payable
+        nonReentrant
+        enforceRateLimit
+        whenNotPaused
+        emergencyNotActive
+    {
         require(whitelistERC721[token], "Token not whitelisted");
         require(recipients.length == tokenIds.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
@@ -241,7 +260,14 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         address[] calldata recipients,
         uint256[] calldata ids,
         uint256[] calldata amounts
-    ) external payable nonReentrant enforceRateLimit whenNotPaused emergencyNotActive {
+    )
+        external
+        payable
+        nonReentrant
+        enforceRateLimit
+        whenNotPaused
+        emergencyNotActive
+    {
         require(whitelistERC1155[token], "Token not whitelisted");
         require(
             recipients.length == ids.length && ids.length == amounts.length,
@@ -276,7 +302,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Custom value of the rate limit
     /// @dev Establishing a custom time limit for accessing the contract
     function setRateLimit(uint256 newDuration) external onlyOwner {
-    rateLimitDuration = newDuration;
+        rateLimitDuration = newDuration;
     }
     /// @notice Custom extended recipient lists
     /// @dev Setting permissions from standard 15 on extended 20 positions
@@ -294,45 +320,54 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @dev Adding an address to the blacklist
     function addBlacklist(address user) external onlyOwner {
         blacklist[user] = true;
+        emit BlacklistUpdated(user, true);
     }
     /// @notice Abolition of the blacklist
     /// @dev Removing an address from the blacklist
     function delBlacklist(address user) external onlyOwner {
         blacklist[user] = false;
+        emit BlacklistUpdated(user, false);
     }
     /// @notice Formation of the whitelist for ERC20 token standard
     /// @dev Adding an address to the whitelist for ERC20 token standard
     function addWhitelistERC20(address token) external onlyOwner {
         whitelistERC20[token] = true;
+        emit WhitelistERC20Updated(token, true);
     }
     /// @notice Abolition of the whitelist for ERC20 token standard
     /// @dev Removing an address from the whitelist for ERC20 token standard
     function delWhitelistERC20(address token) external onlyOwner {
         whitelistERC20[token] = false;
+        emit WhitelistERC20Updated(token, false);
     }
     /// @notice Formation of the whitelist for ERC721 token standard
     /// @dev Adding an address to the whitelist for ERC721 token standard
     function addWhitelistERC721(address token) external onlyOwner {
         whitelistERC721[token] = true;
+        emit WhitelistERC721Updated(token, true);
     }
     /// @notice Abolition of the whitelist for ERC721 token standard
     /// dev Removing an address from the whitelist for ERC721 token standard
     function delWhitelistERC721(address token) external onlyOwner {
         whitelistERC721[token] = false;
+        emit WhitelistERC721Updated(token, false);
     }
     /// @notice Formation of the whitelist for ERC1155 token standard
     /// @dev Adding an address to the whitelist for ERC1155 token standard
     function addWhitelistERC1155(address token) external onlyOwner {
         whitelistERC1155[token] = true;
+        emit WhitelistERC1155Updated(token, true);
     }
     /// @notice Abolition of the whitelist for ERC1155 token standard
     /// @dev Removing an address from the whitelist for ERC1155 token standard
     function delWhitelistERC1155(address token) external onlyOwner {
         whitelistERC1155[token] = false;
+        emit WhitelistERC1155Updated(token, false);
     }
     /// @notice Initiates a two-step ownership transfer process
     /// @dev Sets the pending owner address which can later claim ownership
     function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid owner address");
         pendingOwner = newOwner;
     }
     /// @notice Completes ownership transfer process
@@ -353,21 +388,22 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Activates contract emergency stop
     function emergencyStop(string calldata reason) external onlyOwner {
         require(bytes(reason).length <= 32, "Reason too long");
+        _wasPausedBeforeEmergency = paused();
         isEmergencyStopped = true;
         emergencyReason = reason;
-        emit EmergencyStopActivated(msg.sender, reason);
-    if (!paused()) {
-        _pause();
+        if (!_wasPausedBeforeEmergency) {
+            _pause();
         }
+        emit EmergencyStopActivated(msg.sender, reason);
     }
     /// @notice Removes emergency stop
     function liftEmergencyStop() external onlyOwner {
         isEmergencyStopped = false;
         emergencyReason = "";
+        if (!_wasPausedBeforeEmergency && paused()) {
+            _unpause();
+        }
         emit EmergencyStopLifted(msg.sender);
-        if (paused()) {
-        _unpause();
-    }
     }
     /// @notice Establishing the transaction fee amount
     /// @dev The new fee must be within predefined min/max bounds
@@ -396,11 +432,17 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     }
     /// @notice Pauses the contract
     function pause() external onlyOwner {
+        if (!isEmergencyStopped) {
+            _wasPausedBeforeEmergency = true;
+        }
         _pause();
     }
     /// @notice Unpauses the contract
     function unpause() external onlyOwner {
-        _unpause();
+        if (!isEmergencyStopped) {
+            _wasPausedBeforeEmergency = false;
+            _unpause();
+        }
     }
     /// @notice ERC165 interface support check
     function supportsInterface(
