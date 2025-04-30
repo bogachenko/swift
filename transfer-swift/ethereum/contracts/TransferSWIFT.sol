@@ -14,7 +14,7 @@ import "@openzeppelin/contracts/utils/Address.sol";
 /// @author Bogachenko Vyacheslav
 /// @notice TransferSWIFT is a universal contract for batch transfers of native coins and tokens.
 /// @custom:licence License: MIT
-/// @custom:version Version 0.0.0.6 (unstable)
+/// @custom:version Version 0.0.0.5 (unstable)
 
 contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     // Configuration data
@@ -44,7 +44,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     uint256 public rateLimitDuration = 300;
     //// @notice The emergency stop flag of the contract
     bool public isEmergencyStopped;
-    bool private _wasPausedBeforeEmergency;
+    uint8 private _wasPausedBeforeEmergency;
     /// @notice The reason for activating the emergency mode
     bytes32 public emergencyReason;
 
@@ -143,7 +143,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     }
     /// @dev Recipient function for incoming ETH transactions
     receive() external payable {}
-
+    fallback() external payable {
+    revert("Invalid call");
+    }
     /// @notice Multitransfer for ETH (native coin)
     /// @dev Performs mass distribution of ETH (native coin) to several recipients
     function multiTransferETH(
@@ -177,6 +179,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
         accumulatedRoyalties += taxFee;
         for (uint256 i = 0; i < recipients.length; ) {
+            accumulatedRoyalties += taxFee;
             (bool success, ) = payable(recipients[i]).call{
                 value: amounts[i],
                 gas: 2300
@@ -420,7 +423,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         _wasPausedBeforeEmergency = paused();
         isEmergencyStopped = true;
         emergencyReason = reason;
-        if (!_wasPausedBeforeEmergency) {
+        if (!_wasPausedBeforeEmergency && !paused()) {
             _pause();
         }
         emit EmergencyStopActivated(msg.sender, reason);
