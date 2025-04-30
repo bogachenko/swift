@@ -43,6 +43,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Cooldown of rate limiting (5 minutes)
     uint256 public rateLimitDuration = 300;
 
+    bool public isEmergencyStopped;
+    string public emergencyReason;
+
     // Security mappings
     /// @notice Rate limiting
     mapping(address => uint256) public lastUsed;
@@ -66,6 +69,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         address indexed previousOwner,
         address indexed newOwner
     );
+    //
+    event EmergencyStopActivated(address indexed executor, string reason);
+    event EmergencyStopLifted(address indexed executor);
     // @notice Royalty withdrawal event
     // @dev Generates an event when the accumulated commissions have been successfully withdrawn
     // @param receiver Recipient address (always current owner)
@@ -114,6 +120,11 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         _;
         lastUsed[msg.sender] = block.timestamp;
     }
+    // 
+    modifier emergencyNotActive() {
+    require(!isEmergencyStopped, "Emergency stop active");
+    _;
+    }
 
     /// @notice Contract assembly
     /// @dev Sets msg.sender as the initial owner
@@ -129,7 +140,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     function multiTransferETH(
         address[] calldata recipients,
         uint256[] calldata amounts
-    ) external payable nonReentrant enforceRateLimit whenNotPaused {
+    ) external payable nonReentrant enforceRateLimit whenNotPaused emergencyNotActive {
         require(recipients.length == amounts.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
@@ -158,7 +169,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         address token,
         address[] calldata recipients,
         uint256[] calldata amounts
-    ) external payable nonReentrant enforceRateLimit whenNotPaused {
+    ) external payable nonReentrant enforceRateLimit whenNotPaused emergencyNotActive {
         require(whitelistERC20[token], "Token not whitelisted");
         require(recipients.length == amounts.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
@@ -192,7 +203,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         address token,
         address[] calldata recipients,
         uint256[] calldata tokenIds
-    ) external payable nonReentrant enforceRateLimit whenNotPaused {
+    ) external payable nonReentrant enforceRateLimit whenNotPaused emergencyNotActive {
         require(whitelistERC721[token], "Token not whitelisted");
         require(recipients.length == tokenIds.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
@@ -219,7 +230,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         address[] calldata recipients,
         uint256[] calldata ids,
         uint256[] calldata amounts
-    ) external payable nonReentrant enforceRateLimit whenNotPaused {
+    ) external payable nonReentrant enforceRateLimit whenNotPaused emergencyNotActive {
         require(whitelistERC1155[token], "Token not whitelisted");
         require(
             recipients.length == ids.length && ids.length == amounts.length,
@@ -328,13 +339,31 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         emit OwnershipTransferred(owner, address(0));
         owner = address(0);
     }
+    ///
+    function emergencyStop(string calldata reason) external onlyOwner {
+    require(bytes(reason).length <= 32, "Reason too long");
+    isEmergencyStopped = true;
+    emergencyReason = reason;
+    emit EmergencyStopActivated(msg.sender, reason);
+    
+    if (!paused()) {
+        _pause();
+    }
+    }
+    ///
+    function liftEmergencyStop() external onlyOwner {
+    isEmergencyStopped = false;
+    emergencyReason = "";
+    emit EmergencyStopLifted(msg.sender);
+    
+    if (paused()) {
+        _unpause();
+    }
+    }
     /// @notice Establishing the transaction fee amount
     /// @dev The new fee must be within predefined min/max bounds
     function setTaxFee(uint256 newFee) external onlyOwner {
-        require(
-            newFee >= minTaxFee && newFee <= maxTaxFee,
-            "Fee out of bounds"
-        );
+        require(newFee >= minTaxFee && newFee <= maxTaxFee, "Invalid fee");
         taxFee = newFee;
     }
     /// @notice Withdraws accumulated royalty fees to owner
@@ -342,8 +371,10 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     function withdrawRoyalties() external onlyOwner nonReentrant {
         uint256 amount = accumulatedRoyalties;
         require(amount > 0, "No royalties");
+        require(owner != address(0), "Owner address not set");
         accumulatedRoyalties = 0;
-        payable(owner).sendValue(amount);
+        (bool success, ) = payable(owner).call{value: amount}("");
+        require(success, "ETH transfer failed");
         emit RoyaltiesWithdrawn(owner, amount);
     }
     /// @notice Withdraws accumulated funds to owner
