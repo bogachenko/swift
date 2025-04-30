@@ -163,23 +163,36 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             : defaultRecipients;
         require(recipients.length <= allowedRecipients, "Too many recipients");
         uint256 totalAmount = 0;
-        for (uint256 i = 0; i < recipients.length;) {
+        for (uint256 i = 0; i < recipients.length; ) {
             require(recipients[i] != address(0), "Recipient is zero address");
             require(!blacklist[recipients[i]], "Recipient blacklisted");
             require(amounts[i] > 0, "Amount must be greater than 0");
             uint256 oldTotal = totalAmount;
             totalAmount += amounts[i];
             require(totalAmount >= oldTotal, "Overflow detected");
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
         accumulatedRoyalties += taxFee;
-        for (uint256 i = 0; i < recipients.length; i++) {
-            payable(recipients[i]).sendValue(amounts[i]);
+        for (uint256 i = 0; i < recipients.length; ) {
+            (bool success, ) = payable(recipients[i]).call{
+                value: amounts[i],
+                gas: 2300
+            }("");
+            require(success, "ETH transfer failed");
+            unchecked {
+                ++i;
+            }
         }
         uint256 refund = msg.value - totalAmount - taxFee;
         if (refund > 0) {
-            payable(msg.sender).sendValue(refund);
+            (bool refundSuccess, ) = payable(msg.sender).call{
+                value: refund,
+                gas: 2300
+            }("");
+            require(refundSuccess, "Refund failed");
         }
     }
     /// @notice Multitransfer for ERC20 token standard
@@ -205,7 +218,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         IERC20 erc20 = IERC20(token);
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
-        for (uint256 i = 0; i < recipients.length;) {
+        for (uint256 i = 0; i < recipients.length; ) {
             require(recipients[i] != address(0), "Recipient is zero address");
             require(!blacklist[recipients[i]], "Recipient blacklisted");
             require(amounts[i] > 0, "Amount must be greater than 0");
@@ -221,7 +234,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
                 success && (data.length == 0 || abi.decode(data, (bool))),
                 "ERC20 transfer failed"
             );
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
     }
     /// @notice Multitransfer for ERC721 token standard
@@ -247,16 +262,22 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         IERC721 erc721 = IERC721(token);
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
-        for (uint256 i = 0; i < recipients.length;) {
+        for (uint256 i = 0; i < recipients.length; ) {
             require(recipients[i] != address(0), "Recipient is zero address");
             require(!blacklist[recipients[i]], "Recipient blacklisted");
             require(
                 erc721.ownerOf(tokenIds[i]) == msg.sender,
                 "Not owner of tokenId"
             );
-            erc721.safeTransferFrom(msg.sender, recipients[i], tokenIds[i], bytes("")
+            erc721.safeTransferFrom(
+                msg.sender,
+                recipients[i],
+                tokenIds[i],
+                bytes("")
             );
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
     }
     /// @notice Multitransfer for ERC1155 token standard
@@ -286,7 +307,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         IERC1155 erc1155 = IERC1155(token);
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
-        for (uint256 i = 0; i < recipients.length;) {
+        for (uint256 i = 0; i < recipients.length; ) {
             require(recipients[i] != address(0), "Recipient is zero address");
             require(!blacklist[recipients[i]], "Recipient blacklisted");
             require(amounts[i] > 0, "Amount must be greater than 0");
@@ -294,9 +315,16 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
                 erc1155.balanceOf(msg.sender, ids[i]) >= amounts[i],
                 "Not enough balance"
             );
-            erc1155.safeTransferFrom(msg.sender, recipients[i], ids[i], amounts[i], bytes("")
+            erc1155.safeTransferFrom(
+                msg.sender,
+                recipients[i],
+                ids[i],
+                amounts[i],
+                bytes("")
             );
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
     }
 
@@ -439,9 +467,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     }
     /// @notice Unpauses the contract
     function unpause() external onlyOwner {
-            require(!isEmergencyStopped, "Emergency stop active");
-            _wasPausedBeforeEmergency = false;
-            _unpause();
+        require(!isEmergencyStopped, "Emergency stop active");
+        _wasPausedBeforeEmergency = false;
+        _unpause();
     }
     /// @notice ERC165 interface support check
     /// @dev Implements ERC165 to return true for IERC20, IERC721, IERC1155.
