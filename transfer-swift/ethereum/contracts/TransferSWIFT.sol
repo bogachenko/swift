@@ -42,8 +42,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     uint256 constant maxRecipients = 20;
     /// @notice Cooldown of rate limiting (5 minutes)
     uint256 public rateLimitDuration = 300;
-
+    //// @notice The emergency stop flag of the contract
     bool public isEmergencyStopped;
+    /// @notice The reason for activating the emergency mode
     string public emergencyReason;
 
     // Security mappings
@@ -69,9 +70,18 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         address indexed previousOwner,
         address indexed newOwner
     );
-    //
-    event EmergencyStopActivated(address indexed executor, string reason);
-    event EmergencyStopLifted(address indexed executor);
+    /// @notice Emergency mode activation event
+    /// @param executor Activator's address
+    /// @param reason Reason for activation
+    event EmergencyStopActivated(
+        address indexed executor,
+        string reason
+    );
+    /// @notice Emergency mode deactivation event
+    /// @param executor Deactivator address
+    event EmergencyStopLifted(
+        address indexed executor
+    );
     // @notice Royalty withdrawal event
     // @dev Generates an event when the accumulated commissions have been successfully withdrawn
     // @param receiver Recipient address (always current owner)
@@ -120,7 +130,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         _;
         lastUsed[msg.sender] = block.timestamp;
     }
-    // 
+    /// @notice Active emergency mode
+    /// @dev Prevents functions from being executed when emergency stop is activated
     modifier emergencyNotActive() {
     require(!isEmergencyStopped, "Emergency stop active");
     _;
@@ -339,24 +350,22 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         emit OwnershipTransferred(owner, address(0));
         owner = address(0);
     }
-    ///
+    /// @notice Activates contract emergency stop
     function emergencyStop(string calldata reason) external onlyOwner {
-    require(bytes(reason).length <= 32, "Reason too long");
-    isEmergencyStopped = true;
-    emergencyReason = reason;
-    emit EmergencyStopActivated(msg.sender, reason);
-    
+        require(bytes(reason).length <= 32, "Reason too long");
+        isEmergencyStopped = true;
+        emergencyReason = reason;
+        emit EmergencyStopActivated(msg.sender, reason);
     if (!paused()) {
         _pause();
+        }
     }
-    }
-    ///
+    /// @notice Removes emergency stop
     function liftEmergencyStop() external onlyOwner {
-    isEmergencyStopped = false;
-    emergencyReason = "";
-    emit EmergencyStopLifted(msg.sender);
-    
-    if (paused()) {
+        isEmergencyStopped = false;
+        emergencyReason = "";
+        emit EmergencyStopLifted(msg.sender);
+        if (paused()) {
         _unpause();
     }
     }
