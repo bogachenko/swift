@@ -349,7 +349,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         emit WhitelistERC721Updated(token, true);
     }
     /// @notice Abolition of the whitelist for ERC721 token standard
-    /// dev Removing an address from the whitelist for ERC721 token standard
+    /// @dev Removing an address from the whitelist for ERC721 token standard
     function delWhitelistERC721(address token) external onlyOwner {
         whitelistERC721[token] = false;
         emit WhitelistERC721Updated(token, false);
@@ -383,12 +383,12 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Permanently renounces contract ownership
     /// @dev Sets the contract owner to address zero
     function renounceOwnership() external onlyOwner {
-        pendingOwner = address(0);
+        require(pendingOwner == address(0), "Pending owner exists");
         emit OwnershipTransferred(owner, address(0));
         owner = address(0);
     }
     /// @notice Activates contract emergency stop
-    function emergencyStop(string calldata reason) external onlyOwner {
+    function emergencyStop(bytes32 reason) external onlyOwner {
         require(bytes(reason).length <= 32, "Reason too long");
         _wasPausedBeforeEmergency = paused();
         isEmergencyStopped = true;
@@ -434,26 +434,27 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     }
     /// @notice Pauses the contract
     function pause() external onlyOwner {
-        if (!isEmergencyStopped) {
+            require(!isEmergencyStopped, "Emergency stop active");
             _wasPausedBeforeEmergency = true;
-        }
         _pause();
     }
     /// @notice Unpauses the contract
     function unpause() external onlyOwner {
         if (!isEmergencyStopped) {
+            require(!isEmergencyStopped, "Emergency stop active");
             _wasPausedBeforeEmergency = false;
             _unpause();
         }
     }
     /// @notice ERC165 interface support check
+    /// @dev Implements ERC165 to return true for IERC20, IERC721, IERC1155.
     function supportsInterface(
         bytes4 interfaceId
     ) public view virtual override returns (bool) {
         return
+        super.supportsInterface(interfaceId) ||
             interfaceId == type(IERC20).interfaceId ||
             interfaceId == type(IERC721).interfaceId ||
-            interfaceId == type(IERC1155).interfaceId ||
-            interfaceId == type(ERC165).interfaceId;
+            interfaceId == type(IERC1155).interfaceId;
     }
 }
