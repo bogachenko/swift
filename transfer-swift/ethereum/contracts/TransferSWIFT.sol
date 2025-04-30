@@ -46,7 +46,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     bool public isEmergencyStopped;
     bool private _wasPausedBeforeEmergency;
     /// @notice The reason for activating the emergency mode
-    string public emergencyReason;
+    bytes32 public emergencyReason;
 
     // Security mappings
     /// @notice Rate limiting
@@ -74,7 +74,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Emergency mode activation event
     /// @param executor Activator's address
     /// @param reason Reason for activation
-    event EmergencyStopActivated(address indexed executor, string reason);
+    event EmergencyStopActivated(address indexed executor, bytes32 reason);
     /// @notice Emergency mode deactivation event
     /// @param executor Deactivator address
     event EmergencyStopLifted(address indexed executor);
@@ -209,6 +209,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         whenNotPaused
         emergencyNotActive
     {
+        require(token != address(0), "Invalid token address");
         require(whitelistERC20[token], "Token not whitelisted");
         require(recipients.length == amounts.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
@@ -253,6 +254,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         whenNotPaused
         emergencyNotActive
     {
+        require(token != address(0), "Invalid token address");
         require(whitelistERC721[token], "Token not whitelisted");
         require(recipients.length == tokenIds.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
@@ -295,6 +297,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         whenNotPaused
         emergencyNotActive
     {
+        require(token != address(0), "Invalid token address");
         require(whitelistERC1155[token], "Token not whitelisted");
         require(
             recipients.length == ids.length && ids.length == amounts.length,
@@ -311,10 +314,6 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             require(recipients[i] != address(0), "Recipient is zero address");
             require(!blacklist[recipients[i]], "Recipient blacklisted");
             require(amounts[i] > 0, "Amount must be greater than 0");
-            require(
-                erc1155.balanceOf(msg.sender, ids[i]) >= amounts[i],
-                "Not enough balance"
-            );
             erc1155.safeTransferFrom(
                 msg.sender,
                 recipients[i],
@@ -415,7 +414,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         emit OwnershipTransferred(owner, address(0));
         owner = address(0);
     }
-    /// @notice Activates contract emergency stop
+    /// @notice Emergency stop function of the contract
+    /// @dev Activates the stop mode with a reason. The reason is in 32 bytes (ASCII/hex)
     function emergencyStop(bytes32 reason) external onlyOwner {
         _wasPausedBeforeEmergency = paused();
         isEmergencyStopped = true;
