@@ -167,7 +167,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             require(recipients[i] != address(0), "Recipient is zero address");
             require(!blacklist[recipients[i]], "Recipient blacklisted");
             require(amounts[i] > 0, "Amount must be greater than 0");
+            uint256 oldTotal = totalAmount;
             totalAmount += amounts[i];
+            require(totalAmount >= oldTotal, "Overflow detected");
         }
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
         accumulatedRoyalties += taxFee;
@@ -418,7 +420,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(amount > 0, "No royalties");
         require(owner != address(0), "Owner address not set");
         accumulatedRoyalties = 0;
-        (bool success, ) = payable(owner).call{value: amount}("");
+        (bool success, ) = payable(owner).call{value: amount, gas: 2300}("");
         require(success, "ETH transfer failed");
         emit RoyaltiesWithdrawn(owner, amount);
     }
