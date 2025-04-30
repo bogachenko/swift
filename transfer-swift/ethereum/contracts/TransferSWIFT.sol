@@ -166,8 +166,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(recipients.length <= allowedRecipients, "Too many recipients");
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < recipients.length; ) {
-            require(recipients[i] != address(0), "Recipient is zero address");
-            require(!blacklist[recipients[i]], "Recipient blacklisted");
+            require(recipients[i] != address(0) && !blacklist[recipients[i]], "Invalid recipient");
             require(amounts[i] > 0, "Amount must be greater than 0");
             uint256 oldTotal = totalAmount;
             totalAmount += amounts[i];
@@ -223,8 +222,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
         for (uint256 i = 0; i < recipients.length; ) {
-            require(recipients[i] != address(0), "Recipient is zero address");
-            require(!blacklist[recipients[i]], "Recipient blacklisted");
+            require(recipients[i] != address(0) && !blacklist[recipients[i]], "Invalid recipient");
             require(amounts[i] > 0, "Amount must be greater than 0");
             (bool success, bytes memory data) = address(erc20).call(
                 abi.encodeWithSelector(
@@ -268,8 +266,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
         for (uint256 i = 0; i < recipients.length; ) {
-            require(recipients[i] != address(0), "Recipient is zero address");
-            require(!blacklist[recipients[i]], "Recipient blacklisted");
+            require(recipients[i] != address(0) && !blacklist[recipients[i]], "Invalid recipient");
             require(
                 erc721.ownerOf(tokenIds[i]) == msg.sender,
                 "Not owner of tokenId"
@@ -314,8 +311,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
         for (uint256 i = 0; i < recipients.length; ) {
-            require(recipients[i] != address(0), "Recipient is zero address");
-            require(!blacklist[recipients[i]], "Recipient blacklisted");
+            require(recipients[i] != address(0) && !blacklist[recipients[i]], "Invalid recipient");
+            require(erc1155.balanceOf(msg.sender, tokenIds[i]) > 0, "Not owner of tokenId");
             require(amounts[i] > 0, "Amount must be greater than 0");
             erc1155.safeTransferFrom(
                 msg.sender,
