@@ -590,6 +590,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     function completeWithdrawal()
         external
         onlyOwner
+        nonReentrant
         canWithdraw
         isNotCancelled
     {
@@ -644,6 +645,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     function completeETHWithdrawal()
         external
         onlyOwner
+        nonReentrant
         canWithdrawETH
         isNotCancelledETH
     {
