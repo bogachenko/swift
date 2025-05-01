@@ -20,8 +20,10 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     // Configuration data
     /// @notice Saving information about the current withdrawal request
     WithdrawalRequest public withdrawalRequest;
-    /// @notice The blocking period for funds withdrawal (7 days)
+    /// @notice The blocking period for royalty withdrawal (7 days)
     uint256 public constant withdrawalDelay = 7 days;
+    /// @notice The blocking period for funds withdrawal (7 days)
+    uint256 public constant ETH_WITHDRAWAL_DELAY = 7 days;
     /// @notice Safe ETH operations
     using Address for address payable;
     /// @notice Contract owner address
@@ -77,7 +79,16 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         uint256 requestTime;
         bool isCancelled;
     }
-
+    /// @notice Request for funds ETH (native coin) withdrawal
+    /// @dev Submitting a request for funds withdrawal and funds retention for 7 days
+    /// @param amount - Withdrawal amount in wei
+    /// @param requestTime - The time when the request was made
+    /// @param isCancelled - The flag indicating whether the request has been canceled
+    struct ETHWithdrawalRequest {
+        uint256 amount;
+        uint256 requestTime;
+        bool isCancelled;
+    }
     // Events
     /// @notice Ownership transfer event
     /// @dev Generates an event indicating successful transfer of ownership
@@ -154,7 +165,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(!isEmergencyStopped, "Emergency stop active");
         _;
     }
-    /// @notice Confirmation of the absence of withdrawal of funds
+    /// @notice Confirmation of the absence of withdrawal of royalty funds
     /// @dev Proof that the withdrawal request does not exist
     modifier noActiveWithdrawalRequest() {
         require(
@@ -163,7 +174,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         );
         _;
     }
-    /// @notice Confirmation of incompleteness of the withdrawal period
+    /// @notice Confirmation of incompleteness of the royalty withdrawal period
     /// @dev Proof that the withdrawal period has not passed
     modifier canWithdraw() {
         require(
@@ -172,7 +183,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         );
         _;
     }
-    /// @notice Confirmation of relevance for withdrawal of funds
+    /// @notice Confirmation of the relevance of the royalty withdrawal
     /// @dev Proof that the withdrawal request was not cancelled
     modifier isNotCancelled() {
         require(
@@ -180,6 +191,55 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             "Withdrawal request is cancelled"
         );
         _;
+    }
+    /// @notice Confirmation of the absence of withdrawal of ETH (native coin) funds
+    /// @dev Proof that the withdrawal request does not exist
+    modifier noActiveETHWithdrawalRequest() {
+        require(
+            ethWithdrawalRequest.requestTime == 0 ||
+                ethWithdrawalRequest.isCancelled,
+            "Active ETH withdrawal request exists."
+        );
+        _;
+    }
+    /// @notice Confirmation of incompleteness of the withdrawal period for ETH (native coin) funds
+    /// @dev Proof that the withdrawal period has not passed
+    modifier canWithdrawETH() {
+        require(
+            block.timestamp >=
+                ethWithdrawalRequest.requestTime + ETH_WITHDRAWAL_DELAY,
+            "7 days lock period not passed yet"
+        );
+        _;
+    }
+    /// @notice Confirmation of the relevance of the withdrawal of ETH (native coin) funds
+    /// @dev Proof that the withdrawal request was not cancelled
+    modifier isNotCancelledETH() {
+        require(
+            !ethWithdrawalRequest.isCancelled,
+            "ETH withdrawal request is cancelled"
+        );
+        _;
+    }
+
+    // Функция для запроса на вывод ETH
+    function requestETHWithdrawal(
+        uint256 amount
+    ) external onlyOwner noActiveETHWithdrawalRequest {
+        uint256 availableBalance = address(this).balance - accumulatedRoyalties;
+        require(
+            amount > 0 && amount <= availableBalance,
+            "Invalid amount or insufficient balance"
+        );
+
+        // Создаём запрос на вывод средств ETH
+        ethWithdrawalRequest = ETHWithdrawalRequest({
+            amount: amount,
+            requestTime: block.timestamp,
+            isCancelled: false
+        });
+
+        emit WithdrawalRequested(amount, block.timestamp);
     }
 
     /// @notice Contract assembly
@@ -514,7 +574,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         });
         emit WithdrawalRequested(amount, block.timestamp);
     }
-    /// @notice Canceling withdrawal request
+    /// @notice Canceling a request to withdraw royalty funds
     /// @dev Submitting of cancellation of royalties withdrawal
     function cancelWithdrawal() external onlyOwner {
         require(
@@ -567,9 +627,40 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(success, "ETH transfer failed");
         emit RoyaltiesWithdrawn(owner, amount);
     }
+    /// @notice Canceling a ETH (native coin) withdrawal request
+    /// @dev Submitting a withdrawal cancellation request for ETH (native coin)
+    function cancelETHWithdrawal() external onlyOwner {
+        require(
+            ethWithdrawalRequest.requestTime > 0,
+            "No ETH withdrawal request exists"
+        );
+        require(!ethWithdrawalRequest.isCancelled, "Request already cancelled");
+        ethWithdrawalRequest.isCancelled = true;
+        emit WithdrawalCancelled();
+    }
+
+    /// @notice Completion of ETH (native coin) payment after a specified period
+    /// @dev Submitting a request to confirm the end of the period for withdrawing ETH (native coin)
+    function completeETHWithdrawal()
+        external
+        onlyOwner
+        canWithdrawETH
+        isNotCancelledETH
+    {
+        uint256 amount = ethWithdrawalRequest.amount;
+        ethWithdrawalRequest = ETHWithdrawalRequest(0, 0, true);
+        (bool success, ) = payable(owner).call{value: amount, gas: 2300}("");
+        require(success, "ETH transfer failed");
+        emit WithdrawalCompleted(amount);
+    }
     /// @notice Withdraws accumulated funds to owner
     /// @dev Withdraws funds only
     function withdrawFunds() external onlyOwner nonReentrant {
+        require(
+            ethWithdrawalRequest.requestTime == 0 ||
+                ethWithdrawalRequest.isCancelled,
+            "Active ETH withdrawal request exists"
+        );
         uint256 availableBalance = address(this).balance - accumulatedRoyalties;
         require(availableBalance > 0, "No available funds");
         payable(owner).sendValue(availableBalance);
