@@ -5,6 +5,7 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
@@ -29,6 +30,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     uint256 public constant withdrawalDelay = 3 days;
     /// @notice Using Address library for safe ETH operations
     using Address for address payable;
+    /// @notice Using SafeERC20 library for safe ERC-20 operations
+    using SafeERC20 for IERC20;
     /// @notice Current contract owner address
     address public owner;
     /// @notice Pending ownership candidate address
@@ -136,6 +139,18 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         address indexed previousOwner,
         address indexed newOwner
     );
+    /// @notice Emitted when ownership transfer is initiated
+    /// @dev Marks the beginning of a two-step ownership transfer process
+    /// @param currentOwner - Address of the current owner
+    /// @param pendingOwner - Address of the pending new owner
+    event OwnershipTransferInitiated(
+        address indexed currentOwner,
+        address indexed pendingOwner
+    );
+    /// @notice Emitted when ownership is permanently renounced
+    /// @dev Indicates contract has become ownerless
+    /// @param previousOwner - Address of the last owner
+    event OwnershipRenounced(address indexed previousOwner);
     /// @notice Emitted when emergency stop is activated
     /// @dev Freezes critical contract functionality
     /// @param executor - Address that triggered the emergency stop
@@ -397,18 +412,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
                 "Invalid recipient"
             );
             require(amounts[i] > 0, "Amount must be greater than 0");
-            (bool success, bytes memory data) = address(erc20).call(
-                abi.encodeWithSelector(
-                    erc20.transferFrom.selector,
-                    msg.sender,
-                    recipients[i],
-                    amounts[i]
-                )
-            );
-            require(
-                success && (data.length == 0 || abi.decode(data, (bool))),
-                "ERC20 transfer failed"
-            );
+            erc20.safeTransferFrom(msg.sender, recipients[i], amounts[i]);
             unchecked {
                 ++i;
             }
@@ -605,14 +609,15 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     function transferOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "Invalid owner address");
         pendingOwner = newOwner;
+        emit OwnershipTransferInitiated(owner, newOwner);
     }
     /// @notice Completes ownership transfer
     /// @dev Requirements:
     /// - Caller must be pendingOwner
     function acceptOwnership() external {
         require(msg.sender == pendingOwner, "Not pending owner");
-        emit OwnershipTransferred(owner, msg.sender);
-        owner = msg.sender;
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
         pendingOwner = address(0);
     }
     /// @notice Renounces ownership permanently
@@ -620,7 +625,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// - No pending ownership transfer
     function renounceOwnership() external onlyOwner {
         require(pendingOwner == address(0), "Pending owner exists");
-        emit OwnershipTransferred(owner, address(0));
+        emit OwnershipRenounced(owner);
         owner = address(0);
     }
     /// @notice Activates emergency stop
@@ -698,6 +703,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     function completeWithdrawal()
         external
         onlyOwner
+        nonReentrant
         canWithdraw
         isNotCancelled
     {
