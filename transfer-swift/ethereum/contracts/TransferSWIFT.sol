@@ -17,129 +17,205 @@ import "@openzeppelin/contracts/utils/Address.sol";
 /// @custom:version Version 0.0.0.6 (unstable)
 
 contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
-    // Configuration data
-    /// @notice Saving information about the current royalty withdrawal request
+    /*********************************************************************/
+    /// @title Contract configuration and state parameters
+    /// @notice This section contains contract state variables and settings
+    /*********************************************************************/
+    /// @notice Current royalty withdrawal request
+    /// @dev Stores pending request details (address, amount, timestamp)
     WithdrawalRequest public withdrawalRequest;
-    /// @notice Saving information about the current ETH (native coin) withdrawal request
-    ETHWithdrawalRequest public ethWithdrawalRequest;
-    /// @notice The blocking period for royalty withdrawal (3 days)
+    /// @notice Royalty withdrawal cooldown period
+    /// @dev Security delay of 3 days (3 * 86400 seconds)
     uint256 public constant withdrawalDelay = 3 days;
-    /// @notice Safe ETH operations
+    /// @notice Using Address library for safe ETH operations
     using Address for address payable;
-    /// @notice Contract owner address
+    /// @notice Current contract owner address
     address public owner;
-    /// @notice Transfer of ownership
+    /// @notice Pending ownership candidate address
+    /// @dev Used for two-step ownership transfer
     address public pendingOwner;
     /// @notice Protocol display name
+    /// @dev Used for interface identification
     string public name = "TransferSWIFT";
     /// @notice Protocol symbol
+    /// @dev Used for interface identification
     string public symbol = "SWIFT";
-    /// @notice Current transaction fee (0.0001 ETH)
+    /// @notice Current transaction fee
+    /// @dev Default value: 0.0001 ETH (1e14 wei)
+    /// @dev Must be in range [minTaxFee, maxTaxFee]
     uint256 public taxFee = 1e14;
-    /// @notice Minimum allowed fee (0.000001 ETH)
+    /// @notice Minimum allowed fee
+    /// @dev Value: 0.000001 ETH (1e12 wei)
     uint256 public minTaxFee = 1e12;
-    /// @notice Maximum allowed fee (0.0005 ETH)
+    /// @notice Maximum allowed fee
+    /// @dev Value: 0.0005 ETH (5e14 wei)
     uint256 public maxTaxFee = 5e14;
-    /// @notice Accumulated protocol fees
+    /// @notice Accumulated protocol royalties
+    /// @dev Total collected fees awaiting distribution
     uint256 public accumulatedRoyalties;
-    /// @notice Standard number of allowed recipients
+    /// @notice Default recipient limit
+    /// @dev Default allowance: 15 recipients
     uint256 constant defaultRecipients = 15;
-    /// @notice Maximum number of allowed recipients
+    /// @notice Maximum recipient limit
+    /// @dev Absolute maximum: 20 recipients
     uint256 constant maxRecipients = 20;
-    /// @notice Cooldown of rate limiting (5 minutes)
+    /// @notice Rate limiting duration
+    /// @dev Default value: 300 seconds (5 minutes)
     uint256 public rateLimitDuration = 300;
-    //// @notice The emergency stop flag of the contract
+    /// @notice Contract emergency stop flag
+    /// @dev When activated, blocks main contract functions
     bool public isEmergencyStopped;
+    /// @dev Stores pause state before emergency activation
     bool private _wasPausedBeforeEmergency;
-    /// @notice The reason for activating the emergency mode
+    /// @notice Emergency activation reason
+    /// @dev Stores hashed message describing the reason
     bytes32 public emergencyReason;
 
-    // Mappings
-    /// @notice Rate limiting
+    /*********************************************************************/
+    /// @title Contract access control and restrictions
+    /// @notice This section contains permission mappings and usage restrictions
+    /*********************************************************************/
+    /// @notice Last usage timestamp for rate limiting
+    /// @dev Stores block timestamps for address-based cooldown tracking
+    /// @param userAddress - Address being queried
+    /// @return timestamp - Last interaction time (UNIX format)
     mapping(address => uint256) public lastUsed;
-    /// @notice Blacklisted addresses
+    /// @notice List of prohibited addresses
+    /// @dev Blocked addresses cannot interact with key functions
+    /// @param targetAddress - Address being checked
+    /// @return status - True if address is blacklisted
     mapping(address => bool) public blacklist;
-    /// @notice Addresses with extended recipient limits
+    /// @notice Addresses with increased recipient allowances
+    /// @dev When true, allows bypassing default recipient limits
+    /// @param userAddress - Address being checked
+    /// @return hasExtendedLimit - True if extended limit is granted
     mapping(address => bool) public extendedRecipients;
-    /// @notice Approved ERC20 tokens
+    /// @notice Allowed ERC20 tokens for operations
+    /// @dev Token contract addresses permitted for transactions
+    /// @param tokenAddress - ERC20 contract address
+    /// @return isWhitelisted - True if token is approved
     mapping(address => bool) public whitelistERC20;
-    /// @notice Approved ERC721 tokens
+    /// @notice Allowed ERC721 tokens for operations
+    /// @dev NFT contract addresses permitted for transactions
+    /// @param tokenAddress - ERC721 contract address
+    /// @return isWhitelisted - True if token is approved
     mapping(address => bool) public whitelistERC721;
-    /// @notice Approved ERC1155 tokens
+    /// @notice Allowed ERC1155 tokens for operations
+    /// @dev NFT contract addresses permitted for transactions
+    /// @param tokenAddress - ERC1155 contract address
+    /// @return isWhitelisted - True if token is approved
     mapping(address => bool) public whitelistERC1155;
 
-    // Structure
-    /// @notice Request for commission withdrawal
-    /// @dev Submitting a request for royalty withdrawal and funds retention for 7 days
-    /// @param amount - Withdrawal amount in wei
-    /// @param requestTime - The time when the request was made
-    /// @param isCancelled - The flag indicating whether the request has been canceled
-    /// @param isRoyalties - Flag indicating that the request is for royalties
+    /*********************************************************************/
+    /// @notice Contains data structures for handling contract requests
+    /// @dev Implements security measures using templates
+    /*********************************************************************/
+    /// @title Royalty Withdrawal Request Structure
+    /// @notice Represents a pending royalty withdrawal request
+    /// @dev Enforces security cooldown period before withdrawal execution
+    /// @param amount - Requested withdrawal amount in wei
+    /// @param requestTime - Timestamp of request creation (UNIX format)
+    /// @param isCancelled - Flag to mark request as cancelled (true = inactive)
+    /// @param isRoyalties - Flag to differentiate royalty withdrawals from ETH withdrawals (true = royalty)
     struct WithdrawalRequest {
         uint256 amount;
         uint256 requestTime;
         bool isCancelled;
         bool isRoyalties;
     }
-    // Events
-    /// @notice Ownership transfer event
-    /// @dev Generates an event indicating successful transfer of ownership
-    /// @param previousOwner - Previous owner address
-    /// @param newOwner - New owner address
+
+    /*********************************************************************/
+    /// @title Contract Lifecycle Events
+    /// @notice Events related to contract configuration changes
+    /*********************************************************************/
+    /// @notice Emitted when ownership transfer is completed
+    /// @dev Logs both previous and new contract owners
+    /// @param previousOwner - Address of the outgoing owner
+    /// @param newOwner - Address of the new owner
     event OwnershipTransferred(
         address indexed previousOwner,
         address indexed newOwner
     );
-    /// @notice Emergency mode activation event
-    /// @param executor - Activator's address
-    /// @param reason - Reason for activation
+    /// @notice Emitted when emergency stop is activated
+    /// @dev Freezes critical contract functionality
+    /// @param executor - Address that triggered the emergency stop
+    /// @param reason - Hash of the reason description (Bytes32 format)
     event EmergencyStopActivated(address indexed executor, bytes32 reason);
-    /// @notice Emergency mode deactivation event
-    /// @param executor - Deactivator address
+    /// @notice Emitted when emergency stop is deactivated
+    /// @dev Restores normal contract operations
+    /// @param executor - Address that lifted the emergency stop
     event EmergencyStopLifted(address indexed executor);
-    /// @notice Royalty withdrawal event
-    /// @dev Generates an event when the accumulated commissions have been successfully withdrawn
-    /// @param receiver - Recipient address (always current owner)
-    /// @param amount - Withdrawal amount in wei
+    /// @notice Emitted when royalties are withdrawn
+    /// @dev Indicates successful royalty distribution
+    /// @param receiver - Royalty recipient address (always owner)
+    /// @param amount - Withdrawn amount in wei
     event RoyaltiesWithdrawn(address indexed receiver, uint256 amount);
-    /// @notice ETH (native coin) withdrawal event
-    /// @param requestTime - Request Time
-    /// @param amount - Withdrawal amount in wei
+    /// @notice Emitted when ETH withdrawal is initiated
+    /// @dev Marks the start of withdrawal delay period
+    /// @param amount - Requested amount in wei
+    /// @param requestTime - Timestamp of request creation
     event WithdrawalRequested(uint256 amount, uint256 requestTime);
+    /// @notice Emitted when withdrawal is canceled
+    /// @dev Resets pending withdrawal request
     event WithdrawalCancelled();
+    /// @notice Emitted when withdrawal is completed
+    /// @dev Confirms successful funds transfer
+    /// @param amount - Transferred amount in wei
     event WithdrawalCompleted(uint256 amount);
-    /// @notice Recipient limit change event
-    /// @dev Allows an extended recipient limit for the specified user
+    /// @notice Emitted when recipient limit is increased
+    /// @dev Overrides defaultRecipients for specific address
+    /// @param user - Address receiving limit extension
+    /// @param limit - New maximum recipient allowance
     event MaxRecipientsSet(address indexed user, uint256 limit);
-    /// @notice Recipient limit reset event
-    /// @dev Restores the standard recipient limit for the specified user
+    /// @notice Emitted when recipient limit is reset
+    /// @dev Restores defaultRecipients value for address
+    /// @param user - Address affected by reset
+    /// @param limit - Standard recipient allowance
     event DefaultRecipientsSet(address indexed user, uint256 limit);
-    /// @notice Blacklist status change event
-    /// @param user - User's address
-    /// @param status - New status (true = added to blacklist/false = deleted from blacklist)
+    /// @notice Emitted when blacklist status changes
+    /// @dev Affects access to contract functionality
+    /// @param user - Modified address
+    /// @param status - New status (true = blacklisted)
     event BlacklistUpdated(address indexed user, bool status);
-    /// @notice Whitelist status change event
-    /// @param token - Token's address
-    /// @param status - New status (true = added to whitelist/false = deleted from whitelist)
+    /// @notice Emitted when ERC20 token is whitelisted
+    /// @dev Controls allowed tokens for operations
+    /// @param token - ERC20 contract address
+    /// @param status - New status (true = allowed)
     event WhitelistERC20Updated(address indexed token, bool status);
+    /// @notice Emitted when ERC721 token is whitelisted
+    /// @dev Controls allowed NFTs for operations
+    /// @param token - ERC721 contract address
+    /// @param status - New status (true = allowed)
     event WhitelistERC721Updated(address indexed token, bool status);
+    /// @notice Emitted when ERC1155 token is whitelisted
+    /// @dev Controls allowed multi-tokens for operations
+    /// @param token - ERC1155 contract address
+    /// @param status - New status (true = allowed)
     event WhitelistERC1155Updated(address indexed token, bool status);
 
-    // Modifiers
-    /// @notice Restricts the function call to the owner
-    /// @dev Checks if the sender's address matches the owner
+    /*********************************************************************/
+    /// @title Access Control Modifiers
+    /// @notice Modifiers for permission checks
+    /*********************************************************************/
+    /// @notice Restricts function to contract owner only
+    /// @dev Verifies `msg.sender` matches stored owner address
+    /// @dev Throws "Not owner" on failure
     modifier onlyOwner() {
         require(msg.sender == owner, "Not owner");
         _;
     }
-    /// @notice Blacklist search
-    /// @dev Checking an address in the blacklist
+    /// @notice Prevents access for blacklisted addresses
+    /// @dev Checks against blacklist mapping
+    /// @param addr - Address to verify
+    /// @dev Throws "Address blacklisted" if listed
     modifier notBlacklisted(address addr) {
         require(!blacklist[addr], "Address blacklisted");
         _;
     }
-    /// @notice Rate limit
-    /// @dev Enforces cooldown between transactions
+    /// @notice Enforces transaction cooldown period
+    /// @dev Uses `rateLimitDuration` for cooldown calculation
+    /// @dev Updates `lastUsed` timestamp after execution
+    /// @dev Throws "Rate limit: Wait cooldown period" if too frequent
     modifier enforceRateLimit() {
         require(
             block.timestamp >= lastUsed[msg.sender] + rateLimitDuration,
@@ -148,14 +224,16 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         _;
         lastUsed[msg.sender] = block.timestamp;
     }
-    /// @notice Active emergency mode
-    /// @dev Prevents functions from being executed when emergency stop is activated
+    /// @notice Ensures emergency stop is not active
+    /// @dev Blocks functions during emergency state
+    /// @dev Throws "Emergency stop active" if triggered
     modifier emergencyNotActive() {
         require(!isEmergencyStopped, "Emergency stop active");
         _;
     }
-    /// @notice Confirmation of the absence of withdrawal of royalty funds
-    /// @dev Proof that the withdrawal request does not exist
+    /// @notice Validates no pending royalty withdrawal request
+    /// @dev Checks request state using timestamps and flags
+    /// @dev Throws "Active withdrawal request exists" if pending
     modifier noActiveWithdrawalRequest() {
         require(
             withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled,
@@ -163,8 +241,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         );
         _;
     }
-    /// @notice Confirmation of incompleteness of the royalty withdrawal period
-    /// @dev Proof that the withdrawal period has not passed
+    /// @notice Enforces withdrawal time lock period
+    /// @dev Uses `withdrawalDelay` constant for validation
+    /// @dev Throws "3 days lock period not passed yet" if waiting
     modifier canWithdraw() {
         require(
             block.timestamp >= withdrawalRequest.requestTime + withdrawalDelay,
@@ -172,8 +251,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         );
         _;
     }
-    /// @notice Confirmation of the relevance of the royalty withdrawal
-    /// @dev Proof that the withdrawal request was not cancelled
+    /// @notice Verifies withdrawal request validity
+    /// @dev Ensures request wasn't cancelled
+    /// @dev Throws "Withdrawal request is cancelled" if invalid
     modifier isNotCancelled() {
         require(
             !withdrawalRequest.isCancelled,
@@ -181,19 +261,44 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         );
         _;
     }
-    /// @notice Contract assembly
-    /// @dev Sets msg.sender as the initial owner
-    /// @dev Marked as payable to allow deployment with initial ETH balance
+
+    /*********************************************************************/
+    /// @title Core Contract Functions
+    /// @notice Base contract setup and fallback handlers
+    /*********************************************************************/
+    /// @notice Initializes contract with deployer as owner
+    /// @dev Sets `msg.sender` as initial owner address
+    /// @dev Marked payable to enable ETH funding during deployment
     constructor() payable {
         owner = msg.sender;
     }
-    /// @dev Recipient function for incoming ETH transactions
+    /// @notice Allows contract to receive ETH
+    /// @dev Automatic trigger on plain ETH transfers
     receive() external payable {}
+    /// @notice Fallback for invalid function calls
+    /// @dev Reverts all unrecognized calls
+    /// @dev Prevents accidental execution
     fallback() external payable {
         revert("Invalid call");
     }
-    /// @notice Multitransfer for ETH (native coin)
-    /// @dev Performs mass distribution of ETH (native coin) to several recipients
+
+    /*********************************************************************/
+    /// @title ETH Transfer Operations
+    /// @notice Functions for native currency batch transfers
+    /*********************************************************************/
+    /// @notice Batch transfers ETH to multiple recipients
+    /// @dev Implements fee collection and safety checks
+    /// @param recipients - Array of recipient addresses
+    /// @param amounts - Array of ETH amounts in wei
+    /// @dev Requirements:
+    /// - Arrays must be same length
+    /// - Recipient count within allowed limits
+    /// - Valid recipient addresses
+    /// - Sufficient ETH sent (amounts + taxFee)
+    /// @dev Security:
+    /// - Reentrancy protection
+    /// - Rate limiting
+    /// - Emergency stop check
     function multiTransferETH(
         address[] calldata recipients,
         uint256[] calldata amounts
@@ -246,8 +351,24 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             require(refundSuccess, "Refund failed");
         }
     }
-    /// @notice Multitransfer for ERC20 token standard
-    /// @dev Performs mass distribution of ERC20 token to several recipients
+
+    /*********************************************************************/
+    /// @title ERC20 Transfer Operations
+    /// @notice Functions for fungible token batch transfers
+    /*********************************************************************/
+    /// @notice Batch transfers ERC20 tokens to multiple recipients
+    /// @dev Executes transferFrom for each recipient with fee validation
+    /// @param token Address of ERC20 token contract (must be whitelisted)
+    /// @param recipients Array of valid non-zero recipient addresses
+    /// @param amounts Array of transfer amounts (must be > 0)
+    /// @dev Throws:
+    /// - "Invalid token address" for zero address
+    /// - "Token not whitelisted" if not in allowed list
+    /// - "Mismatched arrays" for length mismatch
+    /// - "Too many recipients" exceeds limit
+    /// - "Invalid recipient" for blacklisted/zero address
+    /// - "ERC20 transfer failed" on transfer errors
+    /// - "Incorrect tax fee" for wrong ETH amount
     function multiTransferERC20(
         address token,
         address[] calldata recipients,
@@ -293,8 +414,19 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             }
         }
     }
-    /// @notice Multitransfer for ERC721 token standard
-    /// @dev Performs mass distribution of ERC721 token to several recipients
+
+    /*********************************************************************/
+    /// @title ERC-721 Transfer Operations
+    /// @notice Functions for fungible token batch transfers
+    /*********************************************************************/
+    /// @notice Batch transfers ERC721 tokens
+    /// @dev Uses safeTransferFrom for NFT handling
+    /// @param token ERC721 contract address
+    /// @param recipients Array of recipient addresses
+    /// @param tokenIds Array of NFT token IDs
+    /// @dev Requirements:
+    /// - Caller must own all tokens
+    /// - Valid whitelisted contract
     function multiTransferERC721(
         address token,
         address[] calldata recipients,
@@ -337,8 +469,20 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             }
         }
     }
-    /// @notice Multitransfer for ERC1155 token standard
-    /// @dev Performs mass distribution of ERC1155 token to several recipients
+
+    /*********************************************************************/
+    /// @title ERC-1155 Transfer Operations
+    /// @notice Functions for fungible token batch transfers
+    /*********************************************************************/
+    /// @notice Batch transfers ERC1155 tokens
+    /// @dev Handles both fungible and non-fungible tokens
+    /// @param token ERC1155 contract address
+    /// @param recipients Array of recipient addresses
+    /// @param ids Array of token IDs
+    /// @param amounts Array of token amounts
+    /// @dev Requirements:
+    /// - Consistent array lengths
+    /// - Sufficient token balances
     function multiTransferERC1155(
         address token,
         address[] calldata recipients,
@@ -388,95 +532,100 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         }
     }
 
-    // Variables
-    /// @notice Custom value of the rate limit
-    /// @dev Establishing a custom time limit for accessing the contract
+    /*********************************************************************/
+    /// @title Contract Configuration
+    /// @notice Functions for managing contract parameters and limits
+    /*********************************************************************/
+    /// @notice Sets transaction rate limit duration
+    /// @dev Only affects future transactions
+    /// @param newDuration New cooldown period in seconds
+    /// @dev Requirements:
+    /// - Caller must be owner
     function setRateLimit(uint256 newDuration) external onlyOwner {
         rateLimitDuration = newDuration;
     }
-    /// @notice Custom extended recipient lists
-    /// @dev Setting permissions from standard 15 on extended 20 positions
+    /// @notice Enables extended recipient limit for address
+    /// @dev Sets maximum allowed recipients to maxRecipients
+    /// @param user - Address to grant extended limit
     function setMaxRecipients(address user) external onlyOwner {
         extendedRecipients[user] = true;
         emit MaxRecipientsSet(user, maxRecipients);
     }
-    /// @notice Custom default recipient lists
-    /// @dev Setting permissions from extended 20 on standard 15 positions
+    /// @notice Resets recipient limit to default
+    /// @dev Sets maximum allowed recipients to defaultRecipients
+    /// @param user - Address to reset limit
     function setDefaultRecipients(address user) external onlyOwner {
         extendedRecipients[user] = false;
         emit DefaultRecipientsSet(user, defaultRecipients);
     }
-    /// @notice Formation of the blacklist
-    /// @dev Adding an address to the blacklist
+    /// @notice Adds address to blacklist
+    /// @dev Blacklisted addresses cannot interact with contract
+    /// @param user Address to blacklist
     function addBlacklist(address user) external onlyOwner {
         blacklist[user] = true;
         emit BlacklistUpdated(user, true);
     }
-    /// @notice Abolition of the blacklist
-    /// @dev Removing an address from the blacklist
     function delBlacklist(address user) external onlyOwner {
         blacklist[user] = false;
         emit BlacklistUpdated(user, false);
     }
-    /// @notice Formation of the whitelist for ERC20 token standard
-    /// @dev Adding an address to the whitelist for ERC20 token standard
+    /// @notice Manages ERC20 token whitelist
+    /// @param token ERC20 contract address
     function addWhitelistERC20(address token) external onlyOwner {
         whitelistERC20[token] = true;
         emit WhitelistERC20Updated(token, true);
     }
-    /// @notice Abolition of the whitelist for ERC20 token standard
-    /// @dev Removing an address from the whitelist for ERC20 token standard
     function delWhitelistERC20(address token) external onlyOwner {
         whitelistERC20[token] = false;
         emit WhitelistERC20Updated(token, false);
     }
-    /// @notice Formation of the whitelist for ERC721 token standard
-    /// @dev Adding an address to the whitelist for ERC721 token standard
+    /// @notice Manages ERC721 token whitelist
+    /// @param token ERC721 contract address
     function addWhitelistERC721(address token) external onlyOwner {
         whitelistERC721[token] = true;
         emit WhitelistERC721Updated(token, true);
     }
-    /// @notice Abolition of the whitelist for ERC721 token standard
-    /// @dev Removing an address from the whitelist for ERC721 token standard
     function delWhitelistERC721(address token) external onlyOwner {
         whitelistERC721[token] = false;
         emit WhitelistERC721Updated(token, false);
     }
-    /// @notice Formation of the whitelist for ERC1155 token standard
-    /// @dev Adding an address to the whitelist for ERC1155 token standard
+    /// @notice Manages ERC1155 token whitelist
+    /// @param token ERC1155 contract address
     function addWhitelistERC1155(address token) external onlyOwner {
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Updated(token, true);
     }
-    /// @notice Abolition of the whitelist for ERC1155 token standard
-    /// @dev Removing an address from the whitelist for ERC1155 token standard
     function delWhitelistERC1155(address token) external onlyOwner {
         whitelistERC1155[token] = false;
         emit WhitelistERC1155Updated(token, false);
     }
-    /// @notice Initiates a two-step ownership transfer process
-    /// @dev Sets the pending owner address which can later claim ownership
+    /// @notice Initiates ownership transfer
+    /// @param newOwner Address of proposed new owner
+    /// @dev New owner must call acceptOwnership
     function transferOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "Invalid owner address");
         pendingOwner = newOwner;
     }
-    /// @notice Completes ownership transfer process
-    /// @dev Allows pending owner to finalize the ownership transfer
+    /// @notice Completes ownership transfer
+    /// @dev Requirements:
+    /// - Caller must be pendingOwner
     function acceptOwnership() external {
         require(msg.sender == pendingOwner, "Not pending owner");
         emit OwnershipTransferred(owner, msg.sender);
         owner = msg.sender;
         pendingOwner = address(0);
     }
-    /// @notice Permanently renounces contract ownership
-    /// @dev Sets the contract owner to address zero
+    /// @notice Renounces ownership permanently
+    /// @dev Requirements:
+    /// - No pending ownership transfer
     function renounceOwnership() external onlyOwner {
         require(pendingOwner == address(0), "Pending owner exists");
         emit OwnershipTransferred(owner, address(0));
         owner = address(0);
     }
-    /// @notice Emergency stop function of the contract
-    /// @dev Activates the stop mode with a reason. The reason is in 32 bytes (ASCII/hex)
+    /// @notice Activates emergency stop
+    /// @param reason Bytes32 encoded reason
+    /// @dev Automatically pauses if not already paused
     function emergencyStop(bytes32 reason) external onlyOwner {
         _wasPausedBeforeEmergency = paused();
         isEmergencyStopped = true;
@@ -486,7 +635,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         }
         emit EmergencyStopActivated(msg.sender, reason);
     }
-    /// @notice Removes emergency stop
+    /// @notice Deactivates emergency stop
+    /// @dev Restores previous pause state
     function liftEmergencyStop() external onlyOwner {
         isEmergencyStopped = false;
         emergencyReason = "";
@@ -495,13 +645,19 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         }
         emit EmergencyStopLifted(msg.sender);
     }
-    /// @notice Establishing the transaction fee amount
-    /// @dev The new fee must be within predefined min/max bounds
+    /// @notice Updates transaction fee amount
+    /// @dev Must be within minTaxFee-maxTaxFee range
+    /// @param newFee New fee value in wei
+    /// @dev Requirements:
+    /// - newFee >= minTaxFee
+    /// - newFee <= maxTaxFee
     function setTaxFee(uint256 newFee) external onlyOwner {
         require(newFee >= minTaxFee && newFee <= maxTaxFee, "Invalid fee");
         taxFee = newFee;
     }
-    /// @notice Withdrawal Request (ETH or Royalty)
+    /// @notice Initiates withdrawal process
+    /// @param amount Amount to withdraw in wei
+    /// @param isRoyalties True for royalties, false for ETH
     function requestWithdrawal(
         uint256 amount,
         bool isRoyalties
@@ -528,8 +684,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         });
         emit WithdrawalRequested(amount, block.timestamp);
     }
-    /// @notice Confirmation of incompleteness of the withdrawal period for funds
-    /// @dev Proof that the withdrawal period has not passed
+    /// @notice Cancels pending withdrawal
     function cancelWithdrawal() external onlyOwner {
         require(
             withdrawalRequest.requestTime > 0,
@@ -539,8 +694,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         withdrawalRequest.isCancelled = true;
         emit WithdrawalCancelled();
     }
-    /// @notice Completion of royalty withdrawal after the period
-    /// @dev Submission of a request for verification of period end to withdraw royalties
+    /// @notice Completes withdrawal after delay
     function completeWithdrawal()
         external
         onlyOwner
@@ -557,8 +711,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(success, "ETH transfer failed");
         emit WithdrawalCompleted(amount);
     }
-    /// @notice Withdraws accumulated funds to owner
-    /// @dev Withdraws funds only
+    /// @notice Withdraws available balance
     function withdrawFunds() external onlyOwner nonReentrant {
         require(
             withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled,
@@ -569,20 +722,22 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         payable(owner).sendValue(availableBalance);
         emit FundsWithdrawn(owner, availableBalance);
     }
-    /// @notice Pauses the contract
+    /// @notice Pauses contract operations
+    /// @dev Cannot pause during emergency stop
     function pause() external onlyOwner {
         require(!isEmergencyStopped, "Emergency stop active");
         _wasPausedBeforeEmergency = true;
         _pause();
     }
-    /// @notice Unpauses the contract
+    /// @notice Unpauses contract operations
+    /// @dev Cannot unpause during emergency stop
     function unpause() external onlyOwner {
         require(!isEmergencyStopped, "Emergency stop active");
         _wasPausedBeforeEmergency = false;
         _unpause();
     }
-    /// @notice ERC165 interface support check
-    /// @dev Implements ERC165 to return true for IERC20, IERC721, IERC1155.
+    /// @notice Checks interface support
+    /// @dev Returns true for supported interfaces (IERC20, IERC721, IERC1155).
     function supportsInterface(
         bytes4 interfaceId
     ) public view virtual override returns (bool) {
