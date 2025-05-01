@@ -73,6 +73,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Emergency activation reason
     /// @dev Stores hashed message describing the reason
     bytes32 public emergencyReason;
+    /// @notice Limit of failed transfers for automatic activation of emergencyStop
+    uint256 public constant maxFailedTransfers = 3;
 
     /*********************************************************************/
     /// @title Contract access control and restrictions
@@ -346,13 +348,20 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         }
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
         accumulatedRoyalties += taxFee;
+        uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             accumulatedRoyalties += taxFee;
             (bool success, ) = payable(recipients[i]).call{
                 value: amounts[i],
                 gas: 2300
             }("");
-            require(success, "ETH transfer failed");
+            if (!success) {
+                localFails++;
+                if (msg.sender == owner && localFails >= maxFailedTransfers) {
+                    _autoEmergency("Too many failed ETH transfers");
+                }
+                revert("ETH transfer failed");
+            }
             unchecked {
                 ++i;
             }
@@ -373,9 +382,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /*********************************************************************/
     /// @notice Batch transfers ERC20 tokens to multiple recipients
     /// @dev Executes transferFrom for each recipient with fee validation
-    /// @param token Address of ERC20 token contract (must be whitelisted)
-    /// @param recipients Array of valid non-zero recipient addresses
-    /// @param amounts Array of transfer amounts (must be > 0)
+    /// @param token - Address of ERC20 token contract (must be whitelisted)
+    /// @param recipients - Array of valid non-zero recipient addresses
+    /// @param amounts - Array of transfer amounts (must be > 0)
     /// @dev Throws:
     /// - "Invalid token address" for zero address
     /// - "Token not whitelisted" if not in allowed list
@@ -406,28 +415,32 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         IERC20 erc20 = IERC20(token);
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
+        uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
-            require(
-                recipients[i] != address(0) && !blacklist[recipients[i]],
-                "Invalid recipient"
-            );
-            require(amounts[i] > 0, "Amount must be greater than 0");
-            erc20.safeTransferFrom(msg.sender, recipients[i], amounts[i]);
-            unchecked {
-                ++i;
+            address to = recipients[i];
+            uint256 amt = amounts[i];
+            require(to != address(0) && !blacklist[to], "Invalid recipient");
+            require(amt > 0, "Amount must be > 0");
+            try erc20.safeTransferFrom(msg.sender, to, amt) {} catch {
+                localFails++;
+                if (msg.sender == owner && localFails >= maxFailedTransfers) {
+                    _autoEmergency("Too many failed ERC20 transfers");
+                }
+                unchecked {
+                    ++i;
+                }
             }
         }
     }
-
     /*********************************************************************/
     /// @title ERC-721 Transfer Operations
     /// @notice Functions for fungible token batch transfers
     /*********************************************************************/
     /// @notice Batch transfers ERC721 tokens
     /// @dev Uses safeTransferFrom for NFT handling
-    /// @param token ERC721 contract address
-    /// @param recipients Array of recipient addresses
-    /// @param tokenIds Array of NFT token IDs
+    /// @param token - ERC721 contract address
+    /// @param recipients - Array of recipient addresses
+    /// @param tokenIds - Array of NFT token IDs
     /// @dev Requirements:
     /// - Caller must own all tokens
     /// - Valid whitelisted contract
@@ -453,21 +466,19 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         IERC721 erc721 = IERC721(token);
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
+        uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
-            require(
-                recipients[i] != address(0) && !blacklist[recipients[i]],
-                "Invalid recipient"
-            );
-            require(
-                erc721.ownerOf(tokenIds[i]) == msg.sender,
-                "Not owner of tokenId"
-            );
-            erc721.safeTransferFrom(
-                msg.sender,
-                recipients[i],
-                tokenIds[i],
-                bytes("")
-            );
+            address to = recipients[i];
+            uint256 id = tokenIds[i];
+            require(to != address(0) && !blacklist[to], "Invalid recipient");
+            require(erc721.ownerOf(id) == msg.sender, "Not owner of tokenId");
+            try erc721.safeTransferFrom(msg.sender, to, id, "") {} catch {
+                localFails++;
+                if (msg.sender == owner && localFails >= maxFailedTransfers) {
+                    _autoEmergency("Too many failed ERC721 transfers");
+                }
+                revert("ERC721 transfer failed");
+            }
             unchecked {
                 ++i;
             }
@@ -480,10 +491,10 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /*********************************************************************/
     /// @notice Batch transfers ERC1155 tokens
     /// @dev Handles both fungible and non-fungible tokens
-    /// @param token ERC1155 contract address
-    /// @param recipients Array of recipient addresses
-    /// @param ids Array of token IDs
-    /// @param amounts Array of token amounts
+    /// @param token - ERC1155 contract address
+    /// @param recipients - Array of recipient addresses
+    /// @param ids - Array of token IDs
+    /// @param amounts - Array of token amounts
     /// @dev Requirements:
     /// - Consistent array lengths
     /// - Sufficient token balances
@@ -513,23 +524,24 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         IERC1155 erc1155 = IERC1155(token);
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
+        uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
+            address to = recipients[i];
+            uint256 id = ids[i];
+            uint256 amt = amounts[i];
+            require(to != address(0) && !blacklist[to], "Invalid recipient");
             require(
-                recipients[i] != address(0) && !blacklist[recipients[i]],
-                "Invalid recipient"
+                erc1155.balanceOf(msg.sender, id) >= amt,
+                "Not enough balance"
             );
-            require(
-                erc1155.balanceOf(msg.sender, ids[i]) > 0,
-                "Not owner of tokenId"
-            );
-            require(amounts[i] > 0, "Amount must be greater than 0");
-            erc1155.safeTransferFrom(
-                msg.sender,
-                recipients[i],
-                ids[i],
-                amounts[i],
-                bytes("")
-            );
+            require(amt > 0, "Amount must be > 0");
+            try erc1155.safeTransferFrom(msg.sender, to, id, amt, "") {} catch {
+                localFails++;
+                if (msg.sender == owner && localFails >= maxFailedTransfers) {
+                    _autoEmergency("Too many failed ERC1155 transfers");
+                }
+                revert("ERC1155 transfer failed");
+            }
             unchecked {
                 ++i;
             }
@@ -542,7 +554,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /*********************************************************************/
     /// @notice Sets transaction rate limit duration
     /// @dev Only affects future transactions
-    /// @param newDuration New cooldown period in seconds
+    /// @param newDuration - New cooldown period in seconds
     /// @dev Requirements:
     /// - Caller must be owner
     function setRateLimit(uint256 newDuration) external onlyOwner {
@@ -564,7 +576,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     }
     /// @notice Adds address to blacklist
     /// @dev Blacklisted addresses cannot interact with contract
-    /// @param user Address to blacklist
+    /// @param user - Address to blacklist
     function addBlacklist(address user) external onlyOwner {
         blacklist[user] = true;
         emit BlacklistUpdated(user, true);
@@ -574,7 +586,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         emit BlacklistUpdated(user, false);
     }
     /// @notice Manages ERC20 token whitelist
-    /// @param token ERC20 contract address
+    /// @param token - ERC20 contract address
     function addWhitelistERC20(address token) external onlyOwner {
         whitelistERC20[token] = true;
         emit WhitelistERC20Updated(token, true);
@@ -584,7 +596,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         emit WhitelistERC20Updated(token, false);
     }
     /// @notice Manages ERC721 token whitelist
-    /// @param token ERC721 contract address
+    /// @param token - ERC721 contract address
     function addWhitelistERC721(address token) external onlyOwner {
         whitelistERC721[token] = true;
         emit WhitelistERC721Updated(token, true);
@@ -594,7 +606,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         emit WhitelistERC721Updated(token, false);
     }
     /// @notice Manages ERC1155 token whitelist
-    /// @param token ERC1155 contract address
+    /// @param token - ERC1155 contract address
     function addWhitelistERC1155(address token) external onlyOwner {
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Updated(token, true);
@@ -604,7 +616,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         emit WhitelistERC1155Updated(token, false);
     }
     /// @notice Initiates ownership transfer
-    /// @param newOwner Address of proposed new owner
+    /// @param newOwner - Address of proposed new owner
     /// @dev New owner must call acceptOwnership
     function transferOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "Invalid owner address");
@@ -629,7 +641,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         owner = address(0);
     }
     /// @notice Activates emergency stop
-    /// @param reason Bytes32 encoded reason
+    /// @param reason - Bytes32 encoded reason
     /// @dev Automatically pauses if not already paused
     function emergencyStop(bytes32 reason) external onlyOwner {
         _wasPausedBeforeEmergency = paused();
@@ -650,9 +662,30 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         }
         emit EmergencyStopLifted(msg.sender);
     }
+    /// @notice Automatically activates emergency stop with hashed reason
+    /// @dev Internal function for protocol self-protection mechanisms
+    /// @param reasonText - Human-readable emergency reason (will be hashed)
+    /// @dev Features:
+    /// - Auto-pauses contract if not already paused
+    /// - Hashes reason text for gas efficiency
+    /// - Idempotent (no-op if already in emergency)
+    /// @dev Security:
+    /// - Maintains pre-emergency pause state
+    /// - Emits event only on state change
+    function _autoEmergency(string memory reasonText) internal {
+        bytes32 reason = keccak256(abi.encodePacked(reasonText));
+        if (isEmergencyStopped) return;
+        _wasPausedBeforeEmergency = paused();
+        isEmergencyStopped = true;
+        emergencyReason = reason;
+        if (!_wasPausedBeforeEmergency) {
+            _pause();
+            emit EmergencyStopActivated(address(this), reason);
+        }
+    }
     /// @notice Updates transaction fee amount
     /// @dev Must be within minTaxFee-maxTaxFee range
-    /// @param newFee New fee value in wei
+    /// @param newFee - New fee value in wei
     /// @dev Requirements:
     /// - newFee >= minTaxFee
     /// - newFee <= maxTaxFee
@@ -661,8 +694,8 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         taxFee = newFee;
     }
     /// @notice Initiates withdrawal process
-    /// @param amount Amount to withdraw in wei
-    /// @param isRoyalties True for royalties, false for ETH
+    /// @param amount - Amount to withdraw in wei
+    /// @param isRoyalties - True for royalties, false for ETH
     function requestWithdrawal(
         uint256 amount,
         bool isRoyalties
