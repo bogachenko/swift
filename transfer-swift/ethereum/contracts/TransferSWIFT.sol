@@ -18,6 +18,10 @@ import "@openzeppelin/contracts/utils/Address.sol";
 
 contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     // Configuration data
+    /// @notice Saving information about the current withdrawal request
+    WithdrawalRequest public withdrawalRequest;
+    /// @notice The blocking period for funds withdrawal (7 days)
+    uint256 public constant withdrawalDelay = 7 days;
     /// @notice Safe ETH operations
     using Address for address payable;
     /// @notice Contract owner address
@@ -48,7 +52,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice The reason for activating the emergency mode
     bytes32 public emergencyReason;
 
-    // Security mappings
+    // Mappings
     /// @notice Rate limiting
     mapping(address => uint256) public lastUsed;
     /// @notice Blacklisted addresses
@@ -62,31 +66,47 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Approved ERC1155 tokens
     mapping(address => bool) public whitelistERC1155;
 
+    // Structure
+    /// @notice Request for commission withdrawal
+    /// @dev Submitting a request for royalty withdrawal and funds retention for 7 days
+    /// @param amount - Withdrawal amount in wei
+    /// @param requestTime - The time when the request was made
+    /// @param isCancelled - The flag indicating whether the request has been canceled
+    struct WithdrawalRequest {
+        uint256 amount;
+        uint256 requestTime;
+        bool isCancelled;
+    }
+
     // Events
     /// @notice Ownership transfer event
     /// @dev Generates an event indicating successful transfer of ownership
-    /// @param previousOwner Previous owner address
-    /// @param newOwner New owner address
+    /// @param previousOwner - Previous owner address
+    /// @param newOwner - New owner address
     event OwnershipTransferred(
         address indexed previousOwner,
         address indexed newOwner
     );
     /// @notice Emergency mode activation event
-    /// @param executor Activator's address
-    /// @param reason Reason for activation
+    /// @param executor - Activator's address
+    /// @param reason - Reason for activation
     event EmergencyStopActivated(address indexed executor, bytes32 reason);
     /// @notice Emergency mode deactivation event
-    /// @param executor Deactivator address
+    /// @param executor - Deactivator address
     event EmergencyStopLifted(address indexed executor);
-    // @notice Royalty withdrawal event
-    // @dev Generates an event when the accumulated commissions have been successfully withdrawn
-    // @param receiver Recipient address (always current owner)
-    // @param amount Withdrawal amount in wei
+    /// @notice Royalty withdrawal event
+    /// @dev Generates an event when the accumulated commissions have been successfully withdrawn
+    /// @param receiver - Recipient address (always current owner)
+    /// @param amount - Withdrawal amount in wei
+    /// @param requestTime - Request Time
     event RoyaltiesWithdrawn(address indexed receiver, uint256 amount);
-    /// @notice funds withdrawal event
+    event WithdrawalRequested(uint256 amount, uint256 requestTime);
+    event WithdrawalCancelled();
+    event WithdrawalCompleted(uint256 amount);
+    /// @notice Funds withdrawal event
     /// @dev Generates an event when the accumulated funds have been successfully withdrawn
-    /// @param receiver Recipient address (always current owner)
-    /// @param amount Withdrawal amount in wei
+    /// @param receiver - Recipient address (always current owner)
+    /// @param amount - Withdrawal amount in wei
     event FundsWithdrawn(address indexed receiver, uint256 amount);
     /// @notice Recipient limit change event
     /// @dev Allows an extended recipient limit for the specified user
@@ -95,12 +115,12 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @dev Restores the standard recipient limit for the specified user
     event DefaultRecipientsSet(address indexed user, uint256 limit);
     /// @notice Blacklist status change event
-    /// @param user User's address
-    /// @param status New status (true = added to blacklist/false = deleted from blacklist)
+    /// @param user - User's address
+    /// @param status - New status (true = added to blacklist/false = deleted from blacklist)
     event BlacklistUpdated(address indexed user, bool status);
     /// @notice Whitelist status change event
-    /// @param token Token's address
-    /// @param status New status (true = added to whitelist/false = deleted from whitelist)
+    /// @param token - Token's address
+    /// @param status - New status (true = added to whitelist/false = deleted from whitelist)
     event WhitelistERC20Updated(address indexed token, bool status);
     event WhitelistERC721Updated(address indexed token, bool status);
     event WhitelistERC1155Updated(address indexed token, bool status);
@@ -134,6 +154,33 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(!isEmergencyStopped, "Emergency stop active");
         _;
     }
+    /// @notice Confirmation of the absence of withdrawal of funds
+    /// @dev Proof that the withdrawal request does not exist
+    modifier noActiveWithdrawalRequest() {
+        require(
+            withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled,
+            "Existing withdrawal request exists."
+        );
+        _;
+    }
+    /// @notice Confirmation of incompleteness of the withdrawal period
+    /// @dev Proof that the withdrawal period has not passed
+    modifier canWithdraw() {
+        require(
+            block.timestamp >= withdrawalRequest.requestTime + withdrawalDelay,
+            "7 days lock period not passed yet"
+        );
+        _;
+    }
+    /// @notice Confirmation of relevance for withdrawal of funds
+    /// @dev Proof that the withdrawal request was not cancelled
+    modifier isNotCancelled() {
+        require(
+            !withdrawalRequest.isCancelled,
+            "Withdrawal request is cancelled"
+        );
+        _;
+    }
 
     /// @notice Contract assembly
     /// @dev Sets msg.sender as the initial owner
@@ -144,7 +191,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @dev Recipient function for incoming ETH transactions
     receive() external payable {}
     fallback() external payable {
-    revert("Invalid call");
+        revert("Invalid call");
     }
     /// @notice Multitransfer for ETH (native coin)
     /// @dev Performs mass distribution of ETH (native coin) to several recipients
@@ -166,7 +213,10 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(recipients.length <= allowedRecipients, "Too many recipients");
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < recipients.length; ) {
-            require(recipients[i] != address(0) && !blacklist[recipients[i]], "Invalid recipient");
+            require(
+                recipients[i] != address(0) && !blacklist[recipients[i]],
+                "Invalid recipient"
+            );
             require(amounts[i] > 0, "Amount must be greater than 0");
             uint256 oldTotal = totalAmount;
             totalAmount += amounts[i];
@@ -222,7 +272,10 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
         for (uint256 i = 0; i < recipients.length; ) {
-            require(recipients[i] != address(0) && !blacklist[recipients[i]], "Invalid recipient");
+            require(
+                recipients[i] != address(0) && !blacklist[recipients[i]],
+                "Invalid recipient"
+            );
             require(amounts[i] > 0, "Amount must be greater than 0");
             (bool success, bytes memory data) = address(erc20).call(
                 abi.encodeWithSelector(
@@ -266,7 +319,10 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
         for (uint256 i = 0; i < recipients.length; ) {
-            require(recipients[i] != address(0) && !blacklist[recipients[i]], "Invalid recipient");
+            require(
+                recipients[i] != address(0) && !blacklist[recipients[i]],
+                "Invalid recipient"
+            );
             require(
                 erc721.ownerOf(tokenIds[i]) == msg.sender,
                 "Not owner of tokenId"
@@ -311,8 +367,14 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         accumulatedRoyalties += taxFee;
         require(msg.value == taxFee, "Incorrect tax fee");
         for (uint256 i = 0; i < recipients.length; ) {
-            require(recipients[i] != address(0) && !blacklist[recipients[i]], "Invalid recipient");
-            require(erc1155.balanceOf(msg.sender, tokenIds[i]) > 0, "Not owner of tokenId");
+            require(
+                recipients[i] != address(0) && !blacklist[recipients[i]],
+                "Invalid recipient"
+            );
+            require(
+                erc1155.balanceOf(msg.sender, tokenIds[i]) > 0,
+                "Not owner of tokenId"
+            );
             require(amounts[i] > 0, "Amount must be greater than 0");
             erc1155.safeTransferFrom(
                 msg.sender,
@@ -440,9 +502,63 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(newFee >= minTaxFee && newFee <= maxTaxFee, "Invalid fee");
         taxFee = newFee;
     }
+    /// @notice Request for royalty withdrawal
+    /// @dev Submitting a request for royalty withdrawal
+    function requestWithdrawal() external onlyOwner noActiveWithdrawalRequest {
+        uint256 amount = accumulatedRoyalties;
+        require(amount > 0, "No royalties to withdraw");
+        withdrawalRequest = WithdrawalRequest({
+            amount: amount,
+            requestTime: block.timestamp,
+            isCancelled: false
+        });
+        emit WithdrawalRequested(amount, block.timestamp);
+    }
+    /// @notice Canceling withdrawal request
+    /// @dev Submitting of cancellation of royalties withdrawal
+    function cancelWithdrawal() external onlyOwner {
+        require(
+            withdrawalRequest.requestTime > 0,
+            "No withdrawal request exists"
+        );
+        require(!withdrawalRequest.isCancelled, "Request already cancelled");
+        withdrawalRequest.isCancelled = true;
+        emit WithdrawalCancelled();
+    }
+    /// @notice Completion of royalty withdrawal after the period
+    /// @dev Submission of a request for verification of period end to withdraw royalties
+    function completeWithdrawal()
+        external
+        onlyOwner
+        canWithdraw
+        isNotCancelled
+    {
+        uint256 amount = withdrawalRequest.amount;
+        withdrawalRequest = WithdrawalRequest(0, 0, true);
+        (bool success, ) = payable(owner).call{value: amount}("");
+        require(success, "ETH transfer failed");
+        emit WithdrawalCompleted(amount);
+    }
+    /// @notice Checking the status of withdrawal request
+    /// @dev Submission of royalty withdrawal status
+    function getWithdrawalRequest()
+        external
+        view
+        returns (uint256 amount, uint256 requestTime, bool isCancelled)
+    {
+        return (
+            withdrawalRequest.amount,
+            withdrawalRequest.requestTime,
+            withdrawalRequest.isCancelled
+        );
+    }
     /// @notice Withdraws accumulated royalty fees to owner
     /// @dev Withdraws commission funds only
     function withdrawRoyalties() external onlyOwner nonReentrant {
+        require(
+            withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled,
+            "Active withdrawal request exists"
+        );
         uint256 amount = accumulatedRoyalties;
         require(amount > 0, "No royalties");
         require(owner != address(0), "Owner address not set");
