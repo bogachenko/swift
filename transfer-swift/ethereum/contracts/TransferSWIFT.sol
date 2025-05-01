@@ -18,8 +18,10 @@ import "@openzeppelin/contracts/utils/Address.sol";
 
 contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     // Configuration data
-    /// @notice Saving information about the current withdrawal request
+    /// @notice Saving information about the current royalty withdrawal request
     WithdrawalRequest public withdrawalRequest;
+    /// @notice Saving information about the current ETH (native coin) withdrawal request
+    ETHWithdrawalRequest public ethWithdrawalRequest;
     /// @notice The blocking period for royalty withdrawal (7 days)
     uint256 public constant withdrawalDelay = 7 days;
     /// @notice The blocking period for funds withdrawal (7 days)
@@ -50,7 +52,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     uint256 public rateLimitDuration = 300;
     //// @notice The emergency stop flag of the contract
     bool public isEmergencyStopped;
-    uint8 private _wasPausedBeforeEmergency;
+    bool private _wasPausedBeforeEmergency;
     /// @notice The reason for activating the emergency mode
     bytes32 public emergencyReason;
 
@@ -109,8 +111,10 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @dev Generates an event when the accumulated commissions have been successfully withdrawn
     /// @param receiver - Recipient address (always current owner)
     /// @param amount - Withdrawal amount in wei
-    /// @param requestTime - Request Time
     event RoyaltiesWithdrawn(address indexed receiver, uint256 amount);
+    /// @notice ETH (native coin) withdrawal event
+    /// @param requestTime - Request Time
+    /// @param amount - Withdrawal amount in wei
     event WithdrawalRequested(uint256 amount, uint256 requestTime);
     event WithdrawalCancelled();
     event WithdrawalCompleted(uint256 amount);
@@ -231,14 +235,11 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             amount > 0 && amount <= availableBalance,
             "Invalid amount or insufficient balance"
         );
-
-        // Создаём запрос на вывод средств ETH
         ethWithdrawalRequest = ETHWithdrawalRequest({
             amount: amount,
             requestTime: block.timestamp,
             isCancelled: false
         });
-
         emit WithdrawalRequested(amount, block.timestamp);
     }
 
@@ -432,7 +433,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
                 "Invalid recipient"
             );
             require(
-                erc1155.balanceOf(msg.sender, tokenIds[i]) > 0,
+                erc1155.balanceOf(msg.sender, ids[i]) > 0,
                 "Not owner of tokenId"
             );
             require(amounts[i] > 0, "Amount must be greater than 0");
@@ -639,7 +640,6 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         ethWithdrawalRequest.isCancelled = true;
         emit WithdrawalCancelled();
     }
-
     /// @notice Completion of ETH (native coin) payment after a specified period
     /// @dev Submitting a request to confirm the end of the period for withdrawing ETH (native coin)
     function completeETHWithdrawal()
