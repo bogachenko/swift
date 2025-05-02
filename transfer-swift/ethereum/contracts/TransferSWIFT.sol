@@ -407,27 +407,34 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
     /// @param who Address to remove moderator role from
     function revokeMod(address who) external onlyAdmin {
         _revokeRole(MOD_ROLE, who);
+        if (!hasRole(USER_ROLE, who)) {
+            _grantRole(USER_ROLE, who);
+        }
     }
     /// @notice Grants base user role to address
     /// @param who Address to assign user role
     /// @dev Can also be auto-granted on first interaction
-    function grantUser(address who) external onlyAdmin {
+    function grantUser(address who) external root {
         _grantRole(USER_ROLE, who);
     }
     /// @notice Revokes user role from address
     /// @param who Address to remove user role from
-    function revokeUser(address who) external onlyAdmin {
+    function revokeUser(address who) external root {
         _revokeRole(USER_ROLE, who);
+        _grantRole(USER_ROLE, who);
     }
     /// @notice Grants VIP user role to address
     /// @param who Address to assign VIP role
-    function grantVIP(address who) external onlyMod {
+    function grantVIP(address who) external root {
         _grantRole(VIPUSER_ROLE, who);
     }
     /// @notice Revokes VIP user role from address
     /// @param who Address to remove VIP role from
-    function revokeVIP(address who) external onlyMod {
+    function revokeVIP(address who) external root {
         _revokeRole(VIPUSER_ROLE, who);
+        if (!hasRole(USER_ROLE, who)) {
+            _grantRole(USER_ROLE, who);
+        }
     }
     /// @notice Grants conman role to address
     /// @param who Address to assign con role
@@ -443,7 +450,7 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
     }
     /// @notice Revokes contract role from address
     /// @param who Address to remove contract role from
-    function revokeCon(address who) external onlyMod {
+    function revokeCon(address who) external root {
         _revokeRole(CON_ROLE, who);
     }
     /*********************************************************************/
@@ -749,44 +756,67 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
         extendedRecipients[user] = false;
         emit DefaultRecipientsSet(user, defaultRecipients);
     }
+    /// @notice Checks if an address is a smart contract
+    /// @dev Uses low-level EVM opcode to check for deployed code
+    /// @param account Address to check
+    /// @return bool True if the address contains contract code, false otherwise
+    /// @dev Security Considerations:
+    /// - Returns false during contract construction (constructor execution)
+    /// - Not reliable for precompiled contracts (0x1-0xffff)
+    /// - May return false positives for destroyed contracts
+    /// @dev When to use:
+    /// - Smart contract whitelisting
+    function isContract(address account) public view returns (bool) {
+        uint256 size;
+        assembly {
+            size := extcodesize(account)
+        }
+        return size > 0;
+    }
     /// @notice Adds address to blacklist
     /// @dev Blacklisted addresses cannot interact with contract
     /// @param user - Address to blacklist
-    function addBlacklist(address user) external onlyOwner {
+    function addBlacklist(address user) external root {
         blacklist[user] = true;
         emit BlacklistUpdated(user, true);
     }
-    function delBlacklist(address user) external onlyOwner {
+    function delBlacklist(address user) external root {
         blacklist[user] = false;
         emit BlacklistUpdated(user, false);
     }
     /// @notice Manages ERC20 token whitelist
     /// @param token - ERC20 contract address
-    function addWhitelistERC20(address token) external onlyOwner {
+    function addWhitelistERC20(address token) external root {
+        require(isContract(token), "Address must be a contract");
         whitelistERC20[token] = true;
         emit WhitelistERC20Updated(token, true);
     }
-    function delWhitelistERC20(address token) external onlyOwner {
+    function delWhitelistERC20(address token) external root {
+        require(isContract(token), "Address must be a contract");
         whitelistERC20[token] = false;
         emit WhitelistERC20Updated(token, false);
     }
     /// @notice Manages ERC721 token whitelist
     /// @param token - ERC721 contract address
-    function addWhitelistERC721(address token) external onlyOwner {
+    function addWhitelistERC721(address token) external root {
+        require(isContract(token), "Address must be a contract");
         whitelistERC721[token] = true;
         emit WhitelistERC721Updated(token, true);
     }
-    function delWhitelistERC721(address token) external onlyOwner {
+    function delWhitelistERC721(address token) external root {
+        require(isContract(token), "Address must be a contract");
         whitelistERC721[token] = false;
         emit WhitelistERC721Updated(token, false);
     }
     /// @notice Manages ERC1155 token whitelist
     /// @param token - ERC1155 contract address
-    function addWhitelistERC1155(address token) external onlyOwner {
+    function addWhitelistERC1155(address token) external root {
+        require(isContract(token), "Address must be a contract");
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Updated(token, true);
     }
-    function delWhitelistERC1155(address token) external onlyOwner {
+    function delWhitelistERC1155(address token) external root {
+        require(isContract(token), "Address must be a contract");
         whitelistERC1155[token] = false;
         emit WhitelistERC1155Updated(token, false);
     }
