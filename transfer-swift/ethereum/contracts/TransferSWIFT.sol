@@ -9,7 +9,6 @@ import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
-import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
 /// @title TransferSWIFT
@@ -18,7 +17,7 @@ import "@openzeppelin/contracts/utils/Address.sol";
 /// @custom:licence License: MIT
 /// @custom:version Version 0.0.0.6 (unstable)
 
-contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
+contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
     /*********************************************************************/
     /// @title Contract configuration and state parameters
     /// @notice This section contains contract state variables and settings
@@ -104,34 +103,30 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
     /*********************************************************************/
     /// @notice Last usage timestamp for rate limiting
     /// @dev Stores block timestamps for address-based cooldown tracking
-    /// @param userAddress - Address being queried
     /// @return timestamp - Last interaction time (UNIX format)
     mapping(address => uint256) public lastUsed;
     /// @notice List of prohibited addresses
     /// @dev Blocked addresses cannot interact with key functions
-    /// @param targetAddress - Address being checked
     /// @return status - True if address is blacklisted
     mapping(address => bool) public blacklist;
     /// @notice Addresses with increased recipient allowances
     /// @dev When true, allows bypassing default recipient limits
-    /// @param userAddress - Address being checked
     /// @return hasExtendedLimit - True if extended limit is granted
     mapping(address => bool) public extendedRecipients;
     /// @notice Allowed ERC20 tokens for operations
     /// @dev Token contract addresses permitted for transactions
-    /// @param tokenAddress - ERC20 contract address
     /// @return isWhitelisted - True if token is approved
     mapping(address => bool) public whitelistERC20;
     /// @notice Allowed ERC721 tokens for operations
     /// @dev NFT contract addresses permitted for transactions
-    /// @param tokenAddress - ERC721 contract address
     /// @return isWhitelisted - True if token is approved
     mapping(address => bool) public whitelistERC721;
     /// @notice Allowed ERC1155 tokens for operations
     /// @dev NFT contract addresses permitted for transactions
-    /// @param tokenAddress - ERC1155 contract address
     /// @return isWhitelisted - True if token is approved
     mapping(address => bool) public whitelistERC1155;
+    /// @notice Tracker of number of participants for each role
+    mapping(bytes32 => uint256) private _roleMembersCount;
 
     /*********************************************************************/
     /// @notice Contains data structures for handling contract requests
@@ -360,6 +355,8 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
         // Grant initial roles
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
+        _roleMembersCount[DEFAULT_ADMIN_ROLE] = 1;
+        _roleMembersCount[ADMIN_ROLE] = 1;
         // Configure role administration hierarchy
         _setRoleAdmin(ADMIN_ROLE, DEFAULT_ADMIN_ROLE);
         _setRoleAdmin(MOD_ROLE, ADMIN_ROLE);
@@ -376,6 +373,23 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
     fallback() external payable {
         revert("Invalid call");
     }
+    /// @notice Counts active members of a specific role
+    /// @dev Internal function that verifies each role assignment
+    function _getRoleMemberCount(bytes32 role) internal view returns (uint256) {
+        return _roleMembersCount[role];
+    }
+    function _grantRole(bytes32 role, address account) internal virtual override {
+    if (!hasRole(role, account)) {
+        _roleMembersCount[role] += 1;
+    }
+    super._grantRole(role, account);
+}
+    function _revokeRole(bytes32 role, address account) internal virtual override {
+    if (hasRole(role, account)) {
+        _roleMembersCount[role] = _roleMembersCount[role] > 0 ? _roleMembersCount[role] - 1 : 0;
+    }
+    super._revokeRole(role, account);
+    }
     /// @notice Grants admin role to address
     /// @param who - Address to assign admin role
     /// @dev Requirements:
@@ -383,7 +397,9 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
     /// - Must not exceed MAX_ADMINS limit
     /// - Recipient address must not have CON_ROLE
     function grantAdmin(address who) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(getRoleMemberCount(ADMIN_ROLE) < MAX_ADMINS, "Max admins");
+        require(_getRoleMemberCount(ADMIN_ROLE) < MAX_ADMINS, "Max admins");
+        require(!hasRole(CON_ROLE, who), "Cannot grant to conman");
+        require(who != address(0), "Zero address prohibited");
         _grantRole(ADMIN_ROLE, who);
     }
     /// @notice Revokes admin role from address
@@ -392,6 +408,11 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
     /// - Caller must have DEFAULT_ADMIN_ROLE
     /// - Cannot revoke last DEFAULT_ADMIN_ROLE
     function revokeAdmin(address who) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(
+            _getRoleMemberCount(DEFAULT_ADMIN_ROLE) > 1,
+            "Cannot revoke last admin"
+        );
+        require(who != address(0), "Zero address prohibited");
         _revokeRole(ADMIN_ROLE, who);
     }
     /// @notice Grants moderator role to address
@@ -400,7 +421,9 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
     /// - Caller must have ADMIN_ROLE
     /// - Must not exceed MAX_MODS limit
     function grantMod(address who) external onlyAdmin {
-        require(getRoleMemberCount(MOD_ROLE) < MAX_MODS, "Max mods");
+        require(_getRoleMemberCount(MOD_ROLE) < MAX_MODS, "Max mods");
+        require(!hasRole(CON_ROLE, who), "Cannot grant to conman");
+        require(who != address(0), "Zero address prohibited");
         _grantRole(MOD_ROLE, who);
     }
     /// @notice Revokes moderator role from address
@@ -954,17 +977,6 @@ contract TransferSWIFT is AccessControl, ReentrancyGuard, Pausable, ERC165 {
         (bool success, ) = payable(owner).call{value: amount, gas: 2300}("");
         require(success, "ETH transfer failed");
         emit WithdrawalCompleted(amount);
-    }
-    /// @notice Withdraws available balance
-    function withdrawFunds() external onlyOwner nonReentrant {
-        require(
-            withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled,
-            "Active withdrawal request exists"
-        );
-        uint256 availableBalance = address(this).balance - accumulatedRoyalties;
-        require(availableBalance > 0, "No available funds");
-        payable(owner).sendValue(availableBalance);
-        emit FundsWithdrawn(owner, availableBalance);
     }
     /// @notice Pauses contract operations
     /// @dev Cannot pause during emergency stop
