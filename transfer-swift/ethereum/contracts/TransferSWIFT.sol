@@ -2,13 +2,13 @@
 pragma solidity ^0.8.20;
 
 // @openzeppelin/contracts: Import libraries
-import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
 /// @title TransferSWIFT
@@ -17,32 +17,11 @@ import "@openzeppelin/contracts/utils/Address.sol";
 /// @custom:licence License: MIT
 /// @custom:version Version 0.0.0.6 (unstable)
 
-contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
+contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /*********************************************************************/
     /// @title Contract configuration and state parameters
     /// @notice This section contains contract state variables and settings
     /*********************************************************************/
-    /// @notice Administrator role hash
-    /// @dev Grants full access to contract management
-    /// @dev Should be granted cautiously
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    /// @notice Moderator role hash
-    /// @dev Grants access to moderation functions
-    /// @dev Should be granted cautiously
-    bytes32 public constant MOD_ROLE = keccak256("MOD_ROLE");
-    /// @notice User role hash
-    /// @dev Base access level for standard users
-    bytes32 public constant USER_ROLE = keccak256("USER_ROLE");
-    /// @notice VIP user role hash
-    /// @dev Grants extended privileges for premium users
-    bytes32 public constant VIPUSER_ROLE = keccak256("VIPUSER_ROLE");
-    /// @notice Conman role hash
-    /// @dev Blocking access to all functions of the contract
-    bytes32 public constant CON_ROLE = keccak256("CON_ROLE");
-    /// @notice Maximum administrator count
-    uint256 public constant MAX_ADMINS = 3;
-    /// @notice Maximum moderator count
-    uint256 public constant MAX_MODS = 10;
     /// @notice Current royalty withdrawal request
     /// @dev Stores pending request details (address, amount, timestamp)
     WithdrawalRequest public withdrawalRequest;
@@ -125,8 +104,6 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
     /// @dev NFT contract addresses permitted for transactions
     /// @return isWhitelisted - True if token is approved
     mapping(address => bool) public whitelistERC1155;
-    /// @notice Tracker of number of participants for each role
-    mapping(bytes32 => uint256) private _roleMembersCount;
 
     /*********************************************************************/
     /// @notice Contains data structures for handling contract requests
@@ -295,52 +272,6 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
         );
         _;
     }
-    /// @notice Restricts access to admin role holders
-    /// @dev Verifies caller has ADMIN_ROLE
-    /// @dev Admins have highest privilege level
-    modifier onlyAdmin() {
-        require(hasRole(ADMIN_ROLE, msg.sender), "Not admin");
-        _;
-    }
-    /// @notice Restricts access to moderator role holders
-    /// @dev Verifies caller has MOD_ROLE
-    /// @dev Moderators have elevated privileges for content management
-    modifier onlyMod() {
-        require(hasRole(MOD_ROLE, msg.sender), "Not mod");
-        _;
-    }
-    /// @notice Restricts access to admin or moderator accounts
-    /// @dev Combines ADMIN_ROLE and MOD_ROLE checks in single modifier
-    /// @dev Security:
-    /// - Provides tiered access to sensitive functions
-    modifier root() {
-        require(
-            hasRole(ADMIN_ROLE, msg.sender) || hasRole(MOD_ROLE, msg.sender),
-            "Not root"
-        );
-        _;
-    }
-    /// @notice Restricts access to user role holders
-    /// @dev Verifies caller has USER_ROLE
-    /// @dev Base access level for registered users
-    modifier onlyUser() {
-        require(hasRole(USER_ROLE, msg.sender), "Not user");
-        _;
-    }
-    /// @notice Restricts access to VIP user role holders
-    /// @dev Verifies caller has VIPUSER_ROLE
-    /// @dev Grants access to premium features
-    modifier onlyVIP() {
-        require(hasRole(VIPUSER_ROLE, msg.sender), "Not vip");
-        _;
-    }
-    /// @notice Restricts access to conman role holders
-    /// @dev Prevents smart contract interactions
-    /// @dev Mitigates bot/front-running risks
-    modifier notCon() {
-        require(!hasRole(CON_ROLE, msg.sender), "You are a con");
-        _;
-    }
 
     /*********************************************************************/
     /// @title Core Contract Functions
@@ -350,19 +281,7 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
     /// @dev Sets `msg.sender` as initial owner address
     /// @dev Marked payable to enable ETH funding during deployment
     constructor() payable {
-        // Set contract owner
         owner = msg.sender;
-        // Grant initial roles
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(ADMIN_ROLE, msg.sender);
-        _roleMembersCount[DEFAULT_ADMIN_ROLE] = 1;
-        _roleMembersCount[ADMIN_ROLE] = 1;
-        // Configure role administration hierarchy
-        _setRoleAdmin(ADMIN_ROLE, DEFAULT_ADMIN_ROLE);
-        _setRoleAdmin(MOD_ROLE, ADMIN_ROLE);
-        _setRoleAdmin(USER_ROLE, ADMIN_ROLE);
-        _setRoleAdmin(VIPUSER_ROLE, MOD_ROLE);
-        _setRoleAdmin(CON_ROLE, MOD_ROLE);
     }
     /// @notice Allows contract to receive ETH
     /// @dev Automatic trigger on plain ETH transfers
@@ -373,109 +292,7 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
     fallback() external payable {
         revert("Invalid call");
     }
-    /// @notice Counts active members of a specific role
-    /// @dev Internal function that verifies each role assignment
-    function _getRoleMemberCount(bytes32 role) internal view returns (uint256) {
-        return _roleMembersCount[role];
-    }
-    function _grantRole(bytes32 role, address account) internal virtual override {
-    if (!hasRole(role, account)) {
-        _roleMembersCount[role] += 1;
-    }
-    super._grantRole(role, account);
-}
-    function _revokeRole(bytes32 role, address account) internal virtual override {
-    if (hasRole(role, account)) {
-        _roleMembersCount[role] = _roleMembersCount[role] > 0 ? _roleMembersCount[role] - 1 : 0;
-    }
-    super._revokeRole(role, account);
-    }
-    /// @notice Grants admin role to address
-    /// @param who - Address to assign admin role
-    /// @dev Requirements:
-    /// - Caller must have DEFAULT_ADMIN_ROLE
-    /// - Must not exceed MAX_ADMINS limit
-    /// - Recipient address must not have CON_ROLE
-    function grantAdmin(address who) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_getRoleMemberCount(ADMIN_ROLE) < MAX_ADMINS, "Max admins");
-        require(!hasRole(CON_ROLE, who), "Cannot grant to conman");
-        require(who != address(0), "Zero address prohibited");
-        _grantRole(ADMIN_ROLE, who);
-    }
-    /// @notice Revokes admin role from address
-    /// @param who - Address to remove admin role from
-    /// @dev Requirements:
-    /// - Caller must have DEFAULT_ADMIN_ROLE
-    /// - Cannot revoke last DEFAULT_ADMIN_ROLE
-    function revokeAdmin(address who) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(
-            _getRoleMemberCount(DEFAULT_ADMIN_ROLE) > 1,
-            "Cannot revoke last admin"
-        );
-        require(who != address(0), "Zero address prohibited");
-        _revokeRole(ADMIN_ROLE, who);
-    }
-    /// @notice Grants moderator role to address
-    /// @param who Address to assign moderator role
-    /// @dev Requirements:
-    /// - Caller must have ADMIN_ROLE
-    /// - Must not exceed MAX_MODS limit
-    function grantMod(address who) external onlyAdmin {
-        require(_getRoleMemberCount(MOD_ROLE) < MAX_MODS, "Max mods");
-        require(!hasRole(CON_ROLE, who), "Cannot grant to conman");
-        require(who != address(0), "Zero address prohibited");
-        _grantRole(MOD_ROLE, who);
-    }
-    /// @notice Revokes moderator role from address
-    /// @param who Address to remove moderator role from
-    function revokeMod(address who) external onlyAdmin {
-        _revokeRole(MOD_ROLE, who);
-        if (!hasRole(USER_ROLE, who)) {
-            _grantRole(USER_ROLE, who);
-        }
-    }
-    /// @notice Grants base user role to address
-    /// @param who Address to assign user role
-    /// @dev Can also be auto-granted on first interaction
-    function grantUser(address who) external root {
-        _grantRole(USER_ROLE, who);
-    }
-    /// @notice Revokes user role from address
-    /// @param who Address to remove user role from
-    function revokeUser(address who) external root {
-        _revokeRole(USER_ROLE, who);
-        _grantRole(USER_ROLE, who);
-    }
-    /// @notice Grants VIP user role to address
-    /// @param who Address to assign VIP role
-    function grantVIP(address who) external root {
-        _grantRole(VIPUSER_ROLE, who);
-    }
-    /// @notice Revokes VIP user role from address
-    /// @param who Address to remove VIP role from
-    function revokeVIP(address who) external root {
-        _revokeRole(VIPUSER_ROLE, who);
-        if (!hasRole(USER_ROLE, who)) {
-            _grantRole(USER_ROLE, who);
-        }
-    }
-    /// @notice Grants conman role to address
-    /// @param who Address to assign con role
-    /// @dev Requirements:
-    /// - Automatically removes USER and VIP roles
-    /// - Recipient must be a smart contract
-    function grantCon(address who) external root {
-        if (hasRole(USER_ROLE, who)) _revokeRole(USER_ROLE, who);
-        if (hasRole(VIPUSER_ROLE, who)) _revokeRole(VIPUSER_ROLE, who);
-        if (hasRole(MOD_ROLE, who)) _revokeRole(MOD_ROLE, who);
-        if (hasRole(ADMIN_ROLE, who)) revert("Cannot block admin");
-        _grantRole(CON_ROLE, who);
-    }
-    /// @notice Revokes contract role from address
-    /// @param who Address to remove contract role from
-    function revokeCon(address who) external root {
-        _revokeRole(CON_ROLE, who);
-    }
+
     /*********************************************************************/
     /// @title ETH Transfer Operations
     /// @notice Functions for native currency batch transfers
@@ -503,14 +320,7 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
-        notCon
     {
-        if (
-            !hasRole(USER_ROLE, msg.sender) &&
-            !hasRole(VIPUSER_ROLE, msg.sender)
-        ) {
-            _grantRole(USER_ROLE, msg.sender);
-        }
         require(recipients.length == amounts.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
@@ -588,14 +398,7 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
-        notCon
     {
-        if (
-            !hasRole(USER_ROLE, msg.sender) &&
-            !hasRole(VIPUSER_ROLE, msg.sender)
-        ) {
-            _grantRole(USER_ROLE, msg.sender);
-        }
         require(token != address(0), "Invalid token address");
         require(whitelistERC20[token], "Token not whitelisted");
         require(recipients.length == amounts.length, "Mismatched arrays");
@@ -612,15 +415,17 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
             uint256 amt = amounts[i];
             require(to != address(0) && !blacklist[to], "Invalid recipient");
             require(amt > 0, "Amount must be > 0");
-            try erc20.safeTransferFrom(msg.sender, to, amt) {} catch {
-                localFails++;
-                if (msg.sender == owner && localFails >= maxFailedTransfers) {
-                    _autoEmergency("Too many failed ERC20 transfers");
-                }
+            bool success = erc20.transferFrom(msg.sender, to, amt);
+        if (!success) {
+            localFails++;
+            if (msg.sender == owner && localFails >= maxFailedTransfers) {
+                _autoEmergency("Too many failed ERC20 transfers");
+            }
+            revert("ERC20 transfer failed");
+        }
                 unchecked {
                     ++i;
                 }
-            }
         }
     }
     /*********************************************************************/
@@ -646,14 +451,7 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
-        notCon
     {
-        if (
-            !hasRole(USER_ROLE, msg.sender) &&
-            !hasRole(VIPUSER_ROLE, msg.sender)
-        ) {
-            _grantRole(USER_ROLE, msg.sender);
-        }
         require(token != address(0), "Invalid token address");
         require(whitelistERC721[token], "Token not whitelisted");
         require(recipients.length == tokenIds.length, "Mismatched arrays");
@@ -708,14 +506,7 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
-        notCon
     {
-        if (
-            !hasRole(USER_ROLE, msg.sender) &&
-            !hasRole(VIPUSER_ROLE, msg.sender)
-        ) {
-            _grantRole(USER_ROLE, msg.sender);
-        }
         require(token != address(0), "Invalid token address");
         require(whitelistERC1155[token], "Token not whitelisted");
         require(
@@ -799,46 +590,46 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
     /// @notice Adds address to blacklist
     /// @dev Blacklisted addresses cannot interact with contract
     /// @param user - Address to blacklist
-    function addBlacklist(address user) external root {
+    function addBlacklist(address user) external onlyOwner {
         blacklist[user] = true;
         emit BlacklistUpdated(user, true);
     }
-    function delBlacklist(address user) external root {
+    function delBlacklist(address user) external onlyOwner {
         blacklist[user] = false;
         emit BlacklistUpdated(user, false);
     }
     /// @notice Manages ERC20 token whitelist
     /// @param token - ERC20 contract address
-    function addWhitelistERC20(address token) external root {
+    function addWhitelistERC20(address token) external onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC20[token] = true;
         emit WhitelistERC20Updated(token, true);
     }
-    function delWhitelistERC20(address token) external root {
+    function delWhitelistERC20(address token) external onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC20[token] = false;
         emit WhitelistERC20Updated(token, false);
     }
     /// @notice Manages ERC721 token whitelist
     /// @param token - ERC721 contract address
-    function addWhitelistERC721(address token) external root {
+    function addWhitelistERC721(address token) external onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC721[token] = true;
         emit WhitelistERC721Updated(token, true);
     }
-    function delWhitelistERC721(address token) external root {
+    function delWhitelistERC721(address token) external onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC721[token] = false;
         emit WhitelistERC721Updated(token, false);
     }
     /// @notice Manages ERC1155 token whitelist
     /// @param token - ERC1155 contract address
-    function addWhitelistERC1155(address token) external root {
+    function addWhitelistERC1155(address token) external onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Updated(token, true);
     }
-    function delWhitelistERC1155(address token) external root {
+    function delWhitelistERC1155(address token) external onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC1155[token] = false;
         emit WhitelistERC1155Updated(token, false);
@@ -996,13 +787,7 @@ contract TransferSWIFT is ReentrancyGuard, AccessControl, Pausable {
     /// @dev Returns true for supported interfaces (IERC20, IERC721, IERC1155).
     function supportsInterface(
         bytes4 interfaceId
-    ) public view virtual override notCon returns (bool) {
-        if (
-            !hasRole(USER_ROLE, msg.sender) &&
-            !hasRole(VIPUSER_ROLE, msg.sender)
-        ) {
-            _grantRole(USER_ROLE, msg.sender);
-        }
+    ) public view virtual override returns (bool) {
         return
             super.supportsInterface(interfaceId) ||
             interfaceId == type(IERC20).interfaceId ||
