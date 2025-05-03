@@ -1,13 +1,11 @@
 const hre = require("hardhat");
 async function main() {
-  const [deployer] = await hre.ethers.getSigners();
-  console.log("Deploying with:", deployer.address);
-  const Factory = await hre.ethers.getContractFactory("TestCOIN721Batch");
-  const contract = await Factory.deploy(deployer.address);
-  await contract.waitForDeployment();
-  console.log("Contract deployed to:", await contract.getAddress());
+	var [e] = await hre.ethers.getSigners();
+	console.log("Deploying with:", e.address);
+	const t = await hre.ethers.getContractFactory("TestCOIN721Batch"),
+		a = await t.deploy(e.address);
+	await a.waitForDeployment(), console.log("Contract deployed to:", await a.getAddress())
 }
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
+main().catch(e => {
+	console.error(e), process.exitCode = 1
 });

@@ -1,24 +1,13 @@
 require("dotenv").config();
 const hre = require("hardhat");
-
 async function main() {
-  const [deployer] = await hre.ethers.getSigners();
-  const contractAddress = process.env.HOLESKY_ERC721_TOKEN_ADDRESS;
-
-  if (!contractAddress) {
-    throw new Error("Адрес контракта не найден в .env (HOLESKY_ERC721_TOKEN_ADDRESS)");
-  }
-
-  const Factory = await hre.ethers.getContractFactory("TestCOIN721Batch");
-  const nft = Factory.attach(contractAddress);
-
-  const tx = await nft.batchMint(deployer.address, 100);
-  await tx.wait();
-
-  console.log(`✅ 100 токенов успешно заминчено на адрес: ${deployer.address}`);
+	var [e] = await hre.ethers.getSigners(), r = process.env.HOLESKY_ERC721_TOKEN_ADDRESS;
+	if(!r) throw new Error("Contract address not found in .env (HOLESKY_ERC721_TOKEN_ADDRESS)");
+	const t = await hre.ethers.getContractFactory("TestCOIN721Batch"),
+		a = t.attach(r),
+		s = await a.batchMint(e.address, 100);
+	await s.wait(), console.log("100 tokens successfully mined to the address: ${deployer.address}")
 }
-
-main().catch((err) => {
-  console.error("❌ Ошибка минта:", err);
-  process.exitCode = 1;
+main().catch(e => {
+	console.error("Mint error:", e), process.exitCode = 1
 });
