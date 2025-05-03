@@ -12,61 +12,61 @@ async function main() {
 			amount: "1"
 		}, {
 			address: "0x2222222222222222222222222222222222222222",
-			amount: "1000000000000000000"
+			amount: "1"
 		}, {
 			address: "0x3333333333333333333333333333333333333333",
-			amount: "6000000000"
+			amount: "1"
 		}, {
 			address: "0x4444444444444444444444444444444444444444",
-			amount: "1000000000"
+			amount: "1"
 		}, {
 			address: "0x5555555555555555555555555555555555555555",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0x6666666666666666666666666666666666666666",
-			amount: "20"
+			amount: "1"
 		}, {
 			address: "0x7777777777777777777777777777777777777777",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0x8888888888888888888888888888888888888888",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0x9999999999999999999999999999999999999999",
-			amount: "530000"
+			amount: "1"
 		}, {
 			address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0xcccccccccccccccccccccccccccccccccccccccc",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0xdddddddddddddddddddddddddddddddddddddddd",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0xffffffffffffffffffffffffffffffffffffffff",
-			amount: "1000000000000000"
+			amount: "1"
 		}, {
 			address: "0x1234567890123456789012345678901234567890",
-			amount: "500000"
+			amount: "1"
 		}, {
 			address: "0x0123456789012345678901234567890123456789",
-			amount: "1000000000"
+			amount: "1"
 		}, {
 			address: "0xdEAD000000000000000042069420694206942069",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0x000000000000000000000000000000000000dEaD",
-			amount: "1000000"
+			amount: "1"
 		}, {
 			address: "0x00000000000000000000045261D4Ee77acdb3286",
-			amount: "7000000000"
+			amount: "1"
 		}],
 		s = r.map((e => e.address)),
 		d = r.map((e => ethers.parseUnits(e.amount, "wei"))),
