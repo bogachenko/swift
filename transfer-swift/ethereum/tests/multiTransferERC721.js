@@ -3,20 +3,104 @@ const hre = require("hardhat");
 const { ethers } = require("hardhat");
 
 async function main() {
-    // Конфигурация
+    // Массив NFT передач
     const NFT_TRANSFERS = [
         {
-            contract: "0x52e760181Cc167Ea3069e993d676274B9572b5B5",
-            tokenId: 1,
-            recipient: "0x1111111111111111111111111111111111111111"
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 2,
+            recipient: "0x2222222222222222222222222222222222222222"
         },
         {
-            contract: "0x00000000001594C61dD8a6804da9AB58eD2483ce",
-            tokenId: 473297086332864274837251139270280213876704458165n,
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 3,
+            recipient: "0x3333333333333333333333333333333333333333"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 4,
+            recipient: "0x4444444444444444444444444444444444444444"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 5,
+            recipient: "0x5555555555555555555555555555555555555555"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 6,
+            recipient: "0x6666666666666666666666666666666666666666"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 7,
+            recipient: "0x7777777777777777777777777777777777777777"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 8,
+            recipient: "0x8888888888888888888888888888888888888888"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 9,
+            recipient: "0x9999999999999999999999999999999999999999"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 10,
+            recipient: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 11,
+            recipient: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 12,
+            recipient: "0xcccccccccccccccccccccccccccccccccccccccc"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 13,
+            recipient: "0xdddddddddddddddddddddddddddddddddddddddd"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 14,
+            recipient: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 15,
+            recipient: "0xffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 16,
+            recipient: "0x1234567890123456789012345678901234567890"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 17,
+            recipient: "0xdEAD000000000000000042069420694206942069"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 18,
+            recipient: "0x000000000000000000000000000000000000dEaD"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 19,
+            recipient: "0x00000000000000000000045261D4Ee77acdb3286"
+        },
+        {
+            contract: "0xd03C5920eA3e0f69f62a761Fad94ebDf5Cea4440",
+            tokenId: 20,
             recipient: "0x2222222222222222222222222222222222222222"
         }
     ];
-
     // Получение адреса TransferSWIFT для текущей сети
     const network = hre.network.name.toUpperCase();
     const SWIFT_CONTRACT_ADDRESS = process.env[`${network}_CONTRACT_ADDRESS`];
@@ -75,11 +159,17 @@ async function main() {
 
     // 7. Проверка taxFee и баланса ETH
     const taxFee = await swiftContract.taxFee();
+    if (!taxFee) {
+        throw new Error("Tax fee is undefined or invalid");
+    }
+
+    // Убедимся, что taxFee можно безопасно преобразовать в BigNumber
+    const totalTaxFee = ethers.BigNumber.from(taxFee.toString()).mul(NFT_TRANSFERS.length);  // Преобразуем в строку, чтобы избежать ошибок
     const ethBalance = await ethers.provider.getBalance(sender.address);
     console.log(`ETH Balance: ${ethers.formatEther(ethBalance)}`);
-    console.log(`Required ETH (tax): ${ethers.formatEther(taxFee * BigInt(NFT_TRANSFERS.length))}`);
+    console.log(`Required ETH (tax): ${ethers.formatEther(totalTaxFee)}`);
 
-    if (ethBalance < taxFee * BigInt(NFT_TRANSFERS.length)) {
+    if (ethBalance.lt(totalTaxFee)) {
         throw new Error("Insufficient ETH for tax fees");
     }
 
@@ -91,7 +181,7 @@ async function main() {
             transfer.contract,
             [transfer.recipient],
             [transfer.tokenId],
-            { value: taxFee }
+            { value: totalTaxFee }
         );
 
         const receipt = await tx.wait();
