@@ -534,7 +534,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Blacklist management
     /// @dev Blacklisted addresses cannot interact with contract
     /// @param user - Addresses of contracts or EOA wallets
-    function addBlacklist(address user) external onlyOwner {
+    function addBlacklist(address user) public onlyOwner {
         require(user != address(0), "Zero address cannot be blacklisted");
         require(!blacklist[user], "Address already blacklisted");
         blacklist[user] = true;
@@ -548,7 +548,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             emit BlacklistUpdated(users[i], true);
         }
     }
-    function delBlacklist(address user) external onlyOwner {
+    function delBlacklist(address user) public onlyOwner {
         require(user != address(0), "Zero address cannot be unblacklisted");
         require(blacklist[user], "Address not in blacklist");
         blacklist[user] = false;
@@ -565,7 +565,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Whitelist management
     /// @dev Whitelisted addresses can interact with the contract
     /// @param token - ERC20 contract address
-    function addWhitelistERC20(address token) external onlyOwner {
+    function addWhitelistERC20(address token) public onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC20[token] = true;
         emit WhitelistERC20Updated(token, true);
@@ -577,7 +577,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             addWhitelistERC20(tokens[i]);
         }
     }
-    function delWhitelistERC20(address token) external onlyOwner {
+    function delWhitelistERC20(address token) public onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC20[token] = false;
         emit WhitelistERC20Updated(token, false);
@@ -592,7 +592,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Manages ERC721 token whitelist
     /// @dev Whitelisted addresses can interact with the contract
     /// @param token - ERC721 contract address
-    function addWhitelistERC721(address token) external onlyOwner {
+    function addWhitelistERC721(address token) public onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC721[token] = true;
         emit WhitelistERC721Updated(token, true);
@@ -604,7 +604,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             addWhitelistERC721(tokens[i]);
         }
     }
-    function delWhitelistERC721(address token) external onlyOwner {
+    function delWhitelistERC721(address token) public onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC721[token] = false;
         emit WhitelistERC721Updated(token, false);
@@ -619,7 +619,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @notice Manages ERC1155 token whitelist
     /// @dev Whitelisted addresses can interact with the contract
     /// @param token - ERC1155 contract address
-    function addWhitelistERC1155(address token) external onlyOwner {
+    function addWhitelistERC1155(address token) public onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Updated(token, true);
@@ -631,7 +631,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             addWhitelistERC1155(tokens[i]);
         }
     }
-    function delWhitelistERC1155(address token) external onlyOwner {
+    function delWhitelistERC1155(address token) public onlyOwner {
         require(isContract(token), "Address must be a contract");
         whitelistERC1155[token] = false;
         emit WhitelistERC1155Updated(token, false);
@@ -780,7 +780,7 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     }
     /// @notice Interfaces support
     /// @dev Low-level query to check supported interfaces
-    /// @param true - Returns True for supported interfaces (IERC20, IERC721, IERC1155).
+    /// @return - Returns True for supported interfaces (IERC20, IERC721, IERC1155).
     function supportsInterface(
         bytes4 interfaceId
     ) public view virtual override returns (bool) {
