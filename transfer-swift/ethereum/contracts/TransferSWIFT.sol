@@ -8,8 +8,8 @@ import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
-import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 
 /// @title TransferSWIFT
 /// @author Bogachenko Vyacheslav
@@ -17,11 +17,26 @@ import "@openzeppelin/contracts/utils/Address.sol";
 /// @custom:licence License: MIT
 /// @custom:version Version 0.0.0.7 (unstable)
 
-contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
+contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /*********************************************************************/
     /// @title Contract configuration and state parameters
     /// @notice This section contains contract state variables and settings
     /*********************************************************************/
+    /// @notice Administrator role hash
+    /// @dev Grants full access to contract management
+    /// @dev Should be granted cautiously
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    /// @notice Moderator role hash
+    /// @dev Grants access to moderation functions
+    /// @dev Should be granted cautiously
+    bytes32 public constant MOD_ROLE = keccak256("MOD_ROLE");
+    /// @notice User role hash
+    /// @dev Base access level for standard users
+    bytes32 public constant USER_ROLE = keccak256("USER_ROLE");
+    /// @notice Maximum administrator count
+    uint256 public constant MAX_ADMINS = 3;
+    /// @notice Maximum moderator count
+    uint256 public constant MAX_MODS = 10;
     /// @notice Data for the current royalty withdrawal request
     /// @dev Stores pending request details (address, amount, timestamp)
     WithdrawalRequest public withdrawalRequest;
@@ -44,12 +59,12 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @dev Used for interface identification
     string public symbol = "SWIFT";
     /// @notice Contract transaction fee
-    /// @dev Default value: 0.0001 ETH (1e14 wei)
+    /// @dev Default value: 0.000001 ETH (1e12 wei)
     /// @dev Must be in range [minTaxFee, maxTaxFee]
-    uint256 public taxFee = 1e14;
+    uint256 public taxFee = 1e12;
     /// @notice Minimum allowed contract fee
-    /// @dev Value: 0.000001 ETH (1e12 wei)
-    uint256 public minTaxFee = 1e12;
+    /// @dev Value: 0.00000001 ETH (1e10 wei)
+    uint256 public minTaxFee = 1e10;
     /// @notice Maximum allowed contract fee
     /// @dev Value: 0.0005 ETH (5e14 wei)
     uint256 public maxTaxFee = 5e14;
@@ -211,6 +226,24 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         require(msg.sender == owner, "Not owner");
         _;
     }
+    /// @notice Restricts access to admin role holders
+    /// @dev Admins have highest privilege level
+    modifier onlyAdmin() {
+        require(hasRole(ADMIN_ROLE, msg.sender), "Not admin");
+        _;
+    }
+    /// @notice Restricts access to moderator role holders
+    /// @dev Moderators have elevated privileges for content management
+    modifier onlyMod() {
+        require(hasRole(MOD_ROLE, msg.sender), "Not mod");
+        _;
+    }
+    /// @notice Restricts access to user role holders
+    /// @dev Base access level for registered users
+    modifier onlyUser() {
+        require(hasRole(USER_ROLE, msg.sender), "Not user");
+        _;
+    }
     /// @notice Blacklist access control
     /// @dev Prevents access for blacklisted addresses
     /// @param addr - Address to verify
@@ -271,7 +304,11 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @dev Sets `msg.sender` as initial owner address
     /// @dev Marked payable to enable ETH funding during deployment (the contract gets 1wei when deployed)
     constructor() payable {
-        owner = msg.sender;
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(ADMIN_ROLE, msg.sender);
+        _setRoleAdmin(ADMIN_ROLE,    DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(MOD_ROLE,      ADMIN_ROLE);
+        _setRoleAdmin(USER_ROLE,     ADMIN_ROLE);
     }
     /// @notice Contract solvency
     /// @dev Allows contract to receive ETH
@@ -301,6 +338,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         whenNotPaused
         emergencyNotActive
     {
+        if (!hasRole(USER_ROLE, msg.sender)) {
+        _grantRole(USER_ROLE, msg.sender);
+        }
         require(recipients.length == amounts.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
@@ -366,6 +406,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         whenNotPaused
         emergencyNotActive
     {
+        if (!hasRole(USER_ROLE, msg.sender)) {
+        _grantRole(USER_ROLE, msg.sender);
+        }
         require(token != address(0), "Invalid token address");
         require(whitelistERC20[token], "Token not whitelisted");
         require(recipients.length == amounts.length, "Mismatched arrays");
@@ -374,8 +417,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             : defaultRecipients;
         require(recipients.length <= allowedRecipients, "Too many recipients");
         IERC20 erc20 = IERC20(token);
-        accumulatedRoyalties += taxFee;
-        require(msg.value == taxFee, "Incorrect tax fee");
+        uint256 totalFee = taxFee * recipients.length;
+        require(msg.value == totalFee, "Incorrect tax fee");
+        accumulatedRoyalties += totalFee;
         uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
@@ -412,6 +456,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         whenNotPaused
         emergencyNotActive
     {
+        if (!hasRole(USER_ROLE, msg.sender)) {
+        _grantRole(USER_ROLE, msg.sender);
+        }
         require(token != address(0), "Invalid token address");
         require(whitelistERC721[token], "Token not whitelisted");
         require(recipients.length == tokenIds.length, "Mismatched arrays");
@@ -420,8 +467,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             : defaultRecipients;
         require(recipients.length <= allowedRecipients, "Too many recipients");
         IERC721 erc721 = IERC721(token);
+        uint256 totalFee = taxFee * recipients.length;
+        require(msg.value == totalFee, "Incorrect tax fee");
         accumulatedRoyalties += taxFee;
-        require(msg.value == taxFee, "Incorrect tax fee");
         uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
@@ -459,6 +507,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
         whenNotPaused
         emergencyNotActive
     {
+        if (!hasRole(USER_ROLE, msg.sender)) {
+        _grantRole(USER_ROLE, msg.sender);
+        }
         require(token != address(0), "Invalid token address");
         require(whitelistERC1155[token], "Token not whitelisted");
         require(
@@ -470,8 +521,9 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
             : defaultRecipients;
         require(recipients.length <= allowedRecipients, "Too many recipients");
         IERC1155 erc1155 = IERC1155(token);
-        accumulatedRoyalties += taxFee;
-        require(msg.value == taxFee, "Incorrect tax fee");
+        uint256 totalFee = taxFee * recipients.length;
+        require(msg.value == totalFee, "Incorrect tax fee");
+        accumulatedRoyalties += totalFee;
         uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
@@ -500,6 +552,38 @@ contract TransferSWIFT is ReentrancyGuard, Pausable, ERC165 {
     /// @title Contract Configuration
     /// @notice Functions for managing contract parameters
     /*********************************************************************/
+    /// @notice Grants admin role to address
+    /// @param who - Address to assign admin role
+    function grantAdmin(address who) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(getRoleMemberCount(ADMIN_ROLE) < MAX_ADMINS, "Max admins");
+        _grantRole(ADMIN_ROLE, who);
+    }
+    /// @notice Revokes admin role from address
+    /// @param who - Address to remove admin role from
+    function revokeAdmin(address who) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _revokeRole(ADMIN_ROLE, who);
+    }
+    /// @notice Grants moderator role to address
+    /// @param who - Address to assign moderator role
+    function grantMod(address who) external onlyAdmin {
+        require(getRoleMemberCount(MOD_ROLE) < MAX_MODS, "Max mods");
+        _grantRole(MOD_ROLE, who);
+    }
+    /// @notice Revokes moderator role from address
+    /// @param who Address to remove moderator role from
+    function revokeMod(address who) external onlyAdmin {
+        _revokeRole(MOD_ROLE, who);
+    }
+    /// @notice Grants base user role to address
+    /// @param who - Address to assign user role
+    function grantUser(address who) external onlyAdmin {
+        _grantRole(USER_ROLE, who);
+    }
+    /// @notice Revokes user role from address
+    /// @param who - Address to remove user role from
+    function revokeUser(address who) external onlyAdmin {
+        _revokeRole(USER_ROLE, who);
+    }
     /// @notice Transaction ratelimit
     /// @dev Sets transaction rate limit duration
     /// @param newDuration - New cooldown period in seconds
