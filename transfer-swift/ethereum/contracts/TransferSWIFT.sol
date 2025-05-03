@@ -15,7 +15,7 @@ import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 /// @author Bogachenko Vyacheslav
 /// @notice TransferSWIFT is a universal contract for batch transfers of native coins and tokens.
 /// @custom:licence License: MIT
-/// @custom:version Version 0.0.0.7 (unstable)
+/// @custom:version Version 0.0.0.7 (stable)
 
 contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /*********************************************************************/
