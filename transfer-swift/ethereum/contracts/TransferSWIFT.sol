@@ -15,7 +15,7 @@ import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 /// @author Bogachenko Vyacheslav
 /// @notice TransferSWIFT is a universal contract for batch transfers of native coins and tokens.
 /// @custom:licence License: MIT
-/// @custom:version Version 0.0.0.7 (unstable)
+/// @custom:version Version 0.0.0.8 (unstable)
 
 contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /*********************************************************************/
@@ -25,18 +25,15 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Administrator role hash
     /// @dev Grants full access to contract management
     /// @dev Should be granted cautiously
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant adminRole = keccak256("adminRole");
     /// @notice Moderator role hash
     /// @dev Grants access to moderation functions
     /// @dev Should be granted cautiously
-    bytes32 public constant MOD_ROLE = keccak256("MOD_ROLE");
-    /// @notice User role hash
-    /// @dev Base access level for standard users
-    bytes32 public constant USER_ROLE = keccak256("USER_ROLE");
+    bytes32 public constant modRole = keccak256("modRole");
     /// @notice Maximum administrator count
-    uint256 public constant MAX_ADMINS = 3;
+    uint256 public constant maxAdmins = 3;
     /// @notice Maximum moderator count
-    uint256 public constant MAX_MODS = 10;
+    uint256 public constant maxMods = 10;
     /// @notice Data for the current royalty withdrawal request
     /// @dev Stores pending request details (address, amount, timestamp)
     WithdrawalRequest public withdrawalRequest;
@@ -189,6 +186,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param user - Address receiving limit extension
     /// @param limit - New maximum recipient allowance
     event MaxRecipientsSet(address indexed user, uint256 limit);
+    /// @notice Emitted when the rate limit duration is updated
+    /// @dev Indicates a change in the cooldown period between transactions
+    /// @param newDuration - New rate limit duration in seconds
+    event RateLimitUpdated(uint256 indexed newDuration);
     /// @notice Emitted when recipient limit is reset
     /// @dev Restores `defaultRecipients` value for address
     /// @param user - Address affected by reset
@@ -214,6 +215,26 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - ERC1155 contract address
     /// @param status - New status (true = allowed)
     event WhitelistERC1155Updated(address indexed token, bool status);
+    /// @notice Emitted when a role is granted to an account
+    /// @dev Generated during successful _grantRole executions
+    /// @param role - The bytes32 role identifier
+    /// @param account - The address that received the role
+    /// @param sender - The address that initiated the grant
+    event RoleGranted(
+        bytes32 indexed role,
+        address indexed account,
+        address indexed sender
+    );
+    /// @notice Emitted when a role is revoked from an account
+    /// @dev Generated during successful _revokeRole executions
+    /// @param role - The bytes32 role identifier
+    /// @param account - The address that lost the role
+    /// @param sender - The address that initiated the revocation
+    event RoleRevoked(
+        bytes32 indexed role,
+        address indexed account,
+        address indexed sender
+    );
 
     /*********************************************************************/
     /// @title Access Control Modifiers
@@ -226,22 +247,25 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(msg.sender == owner, "Not owner");
         _;
     }
-    /// @notice Restricts access to admin role holders
+    /// @notice Restricts access to administrator role holders
     /// @dev Admins have highest privilege level
     modifier onlyAdmin() {
-        require(hasRole(ADMIN_ROLE, msg.sender), "Not admin");
+        require(hasRole(adminRole, msg.sender), "Not admin");
         _;
     }
     /// @notice Restricts access to moderator role holders
     /// @dev Moderators have elevated privileges for content management
     modifier onlyMod() {
-        require(hasRole(MOD_ROLE, msg.sender), "Not mod");
+        require(hasRole(modRole, msg.sender), "Not mod");
         _;
     }
-    /// @notice Restricts access to user role holders
-    /// @dev Base access level for registered users
-    modifier onlyUser() {
-        require(hasRole(USER_ROLE, msg.sender), "Not user");
+    /// @notice Restricts access to administrators or moderators role holders
+    /// @dev Combines two role checks into single modifier
+    modifier onlyRoot() {
+        require(
+            hasRole(adminRole, msg.sender) || hasRole(modRole, msg.sender),
+            "Caller is not admin or mod"
+        );
         _;
     }
     /// @notice Blacklist access control
@@ -304,11 +328,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Sets `msg.sender` as initial owner address
     /// @dev Marked payable to enable ETH funding during deployment (the contract gets 1wei when deployed)
     constructor() payable {
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(ADMIN_ROLE, msg.sender);
-        _setRoleAdmin(ADMIN_ROLE,    DEFAULT_ADMIN_ROLE);
-        _setRoleAdmin(MOD_ROLE,      ADMIN_ROLE);
-        _setRoleAdmin(USER_ROLE,     ADMIN_ROLE);
+        owner = msg.sender;
+        _grantRole(adminRole, msg.sender);
+        _setRoleAdmin(adminRole, adminRole);
+        _setRoleAdmin(modRole, adminRole);
     }
     /// @notice Contract solvency
     /// @dev Allows contract to receive ETH
@@ -338,9 +361,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whenNotPaused
         emergencyNotActive
     {
-        if (!hasRole(USER_ROLE, msg.sender)) {
-        _grantRole(USER_ROLE, msg.sender);
-        }
         require(recipients.length == amounts.length, "Mismatched arrays");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
@@ -361,7 +381,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             }
         }
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
-        accumulatedRoyalties += taxFee;
         uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             accumulatedRoyalties += taxFee;
@@ -371,7 +390,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             }("");
             if (!success) {
                 localFails++;
-                if (msg.sender == owner && localFails >= maxFailedTransfers) {
+                if (
+                    hasRole(adminRole, msg.sender) &&
+                    localFails >= maxFailedTransfers
+                ) {
                     _autoEmergency("Too many failed ETH transfers");
                 }
                 revert("ETH transfer failed");
@@ -406,9 +428,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whenNotPaused
         emergencyNotActive
     {
-        if (!hasRole(USER_ROLE, msg.sender)) {
-        _grantRole(USER_ROLE, msg.sender);
-        }
         require(token != address(0), "Invalid token address");
         require(whitelistERC20[token], "Token not whitelisted");
         require(recipients.length == amounts.length, "Mismatched arrays");
@@ -429,7 +448,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             bool success = erc20.transferFrom(msg.sender, to, amt);
             if (!success) {
                 localFails++;
-                if (msg.sender == owner && localFails >= maxFailedTransfers) {
+                if (
+                    hasRole(adminRole, msg.sender) &&
+                    localFails >= maxFailedTransfers
+                ) {
                     _autoEmergency("Too many failed ERC20 transfers");
                 }
                 revert("ERC20 transfer failed");
@@ -456,9 +478,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whenNotPaused
         emergencyNotActive
     {
-        if (!hasRole(USER_ROLE, msg.sender)) {
-        _grantRole(USER_ROLE, msg.sender);
-        }
         require(token != address(0), "Invalid token address");
         require(whitelistERC721[token], "Token not whitelisted");
         require(recipients.length == tokenIds.length, "Mismatched arrays");
@@ -478,7 +497,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             require(erc721.ownerOf(id) == msg.sender, "Not owner of tokenId");
             try erc721.safeTransferFrom(msg.sender, to, id, "") {} catch {
                 localFails++;
-                if (msg.sender == owner && localFails >= maxFailedTransfers) {
+                if (
+                    hasRole(adminRole, msg.sender) &&
+                    localFails >= maxFailedTransfers
+                ) {
                     _autoEmergency("Too many failed ERC721 transfers");
                 }
                 revert("ERC721 transfer failed");
@@ -507,9 +529,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whenNotPaused
         emergencyNotActive
     {
-        if (!hasRole(USER_ROLE, msg.sender)) {
-        _grantRole(USER_ROLE, msg.sender);
-        }
         require(token != address(0), "Invalid token address");
         require(whitelistERC1155[token], "Token not whitelisted");
         require(
@@ -537,7 +556,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             require(amt > 0, "Amount must be > 0");
             try erc1155.safeTransferFrom(msg.sender, to, id, amt, "") {} catch {
                 localFails++;
-                if (msg.sender == owner && localFails >= maxFailedTransfers) {
+                if (
+                    hasRole(adminRole, msg.sender) &&
+                    localFails >= maxFailedTransfers
+                ) {
                     _autoEmergency("Too many failed ERC1155 transfers");
                 }
                 revert("ERC1155 transfer failed");
@@ -552,55 +574,57 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @title Contract Configuration
     /// @notice Functions for managing contract parameters
     /*********************************************************************/
-    /// @notice Grants admin role to address
-    /// @param who - Address to assign admin role
-    function grantAdmin(address who) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(getRoleMemberCount(ADMIN_ROLE) < MAX_ADMINS, "Max admins");
-        _grantRole(ADMIN_ROLE, who);
+    /// @notice Grants a specific role to an address
+    /// @dev Includes additional safeguards for role capacity limits
+    /// @param role - The role identifier to grant (bytes32)
+    /// @param account - The address receiving the role
+    function grantRole(bytes32 role, address account) external onlyAdmin {
+        require(account != address(0), "Zero address");
+        require(!isContract(account), "Address must not be a contract");
+        if (role == adminRole) {
+            require(getRoleMemberCount(adminRole) < maxAdmins, "Max admins");
+        }
+        if (role == modRole) {
+            require(getRoleMemberCount(modRole) < maxMods, "Max mods");
+        }
+        _grantRole(role, account);
+        emit RoleGranted(role, account, msg.sender);
     }
-    /// @notice Revokes admin role from address
-    /// @param who - Address to remove admin role from
-    function revokeAdmin(address who) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        _revokeRole(ADMIN_ROLE, who);
-    }
-    /// @notice Grants moderator role to address
-    /// @param who - Address to assign moderator role
-    function grantMod(address who) external onlyAdmin {
-        require(getRoleMemberCount(MOD_ROLE) < MAX_MODS, "Max mods");
-        _grantRole(MOD_ROLE, who);
-    }
-    /// @notice Revokes moderator role from address
-    /// @param who Address to remove moderator role from
-    function revokeMod(address who) external onlyAdmin {
-        _revokeRole(MOD_ROLE, who);
-    }
-    /// @notice Grants base user role to address
-    /// @param who - Address to assign user role
-    function grantUser(address who) external onlyAdmin {
-        _grantRole(USER_ROLE, who);
-    }
-    /// @notice Revokes user role from address
-    /// @param who - Address to remove user role from
-    function revokeUser(address who) external onlyAdmin {
-        _revokeRole(USER_ROLE, who);
+    /// @notice Revokes a role from an address
+    /// @param role - The role identifier to revoke
+    /// @param account - The address losing the role
+    function revokeRole(
+        bytes32 role,
+        address account
+    ) external onlyAdmin {
+        if (role == adminRole) {
+            require(
+                getRoleMemberCount(adminRole) > 1,
+                "Cannot remove last admin"
+            );
+            require(account != msg.sender, "Self-removal forbidden");
+        }
+        _revokeRole(role, account);
+        emit RoleRevoked(role, account, msg.sender);
     }
     /// @notice Transaction ratelimit
     /// @dev Sets transaction rate limit duration
     /// @param newDuration - New cooldown period in seconds
-    function setRateLimit(uint256 newDuration) external onlyOwner {
+    function setRateLimit(uint256 newDuration) external onlyRoot {
         rateLimitDuration = newDuration;
+        emit RateLimitUpdated(newDuration);
     }
     /// @notice Extended recipient limit
     /// @dev Enables extended recipient limit for address
     /// @param user - Address to grant extended limit
-    function setMaxRecipients(address user) external onlyOwner {
+    function setMaxRecipients(address user) external onlyRoot {
         extendedRecipients[user] = true;
         emit MaxRecipientsSet(user, maxRecipients);
     }
     /// @notice Default recipient limit
     /// @dev Resets recipient limit to default
     /// @param user - Address to grant default limit
-    function setDefaultRecipients(address user) external onlyOwner {
+    function setDefaultRecipients(address user) external onlyRoot {
         extendedRecipients[user] = false;
         emit DefaultRecipientsSet(user, defaultRecipients);
     }
@@ -618,13 +642,13 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Blacklist management
     /// @dev Blacklisted addresses cannot interact with contract
     /// @param user - Addresses of contracts or EOA wallets
-    function addBlacklist(address user) public onlyOwner {
+    function addBlacklist(address user) public onlyRoot {
         require(user != address(0), "Zero address cannot be blacklisted");
         require(!blacklist[user], "Address already blacklisted");
         blacklist[user] = true;
         emit BlacklistUpdated(user, true);
     }
-    function batchAddBlacklist(address[] calldata users) external onlyOwner {
+    function batchAddBlacklist(address[] calldata users) external onlyRoot {
         for (uint256 i = 0; i < users.length; i++) {
             require(users[i] != address(0), "Zero address");
             require(!blacklist[users[i]], "Already blacklisted");
@@ -632,13 +656,13 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             emit BlacklistUpdated(users[i], true);
         }
     }
-    function delBlacklist(address user) public onlyOwner {
+    function delBlacklist(address user) public onlyRoot {
         require(user != address(0), "Zero address cannot be unblacklisted");
         require(blacklist[user], "Address not in blacklist");
         blacklist[user] = false;
         emit BlacklistUpdated(user, false);
     }
-    function batchDelBlacklist(address[] calldata users) external onlyOwner {
+    function batchDelBlacklist(address[] calldata users) external onlyRoot {
         for (uint256 i = 0; i < users.length; i++) {
             require(users[i] != address(0), "Zero address");
             require(blacklist[users[i]], "Address not in blacklist");
@@ -649,26 +673,31 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Whitelist management
     /// @dev Whitelisted addresses can interact with the contract
     /// @param token - ERC20 contract address
-    function addWhitelistERC20(address token) public onlyOwner {
+    function addWhitelistERC20(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
+        require(
+        IERC165(token).supportsInterface(type(IERC20).interfaceId),
+        "Not ERC20"
+    );
         whitelistERC20[token] = true;
         emit WhitelistERC20Updated(token, true);
     }
     function batchAddWhitelistERC20(
         address[] calldata tokens
-    ) external onlyOwner {
+    ) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             addWhitelistERC20(tokens[i]);
         }
     }
-    function delWhitelistERC20(address token) public onlyOwner {
+    function delWhitelistERC20(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
+        require(whitelistERC20[token], "Token not in whitelist");
         whitelistERC20[token] = false;
         emit WhitelistERC20Updated(token, false);
     }
     function batchDelWhitelistERC20(
         address[] calldata tokens
-    ) external onlyOwner {
+    ) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             delWhitelistERC20(tokens[i]);
         }
@@ -676,26 +705,31 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Manages ERC721 token whitelist
     /// @dev Whitelisted addresses can interact with the contract
     /// @param token - ERC721 contract address
-    function addWhitelistERC721(address token) public onlyOwner {
+    function addWhitelistERC721(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
+    require(
+        IERC165(token).supportsInterface(type(IERC721).interfaceId),
+        "Not ERC721"
+    );
         whitelistERC721[token] = true;
         emit WhitelistERC721Updated(token, true);
     }
     function batchAddWhitelistERC721(
         address[] calldata tokens
-    ) external onlyOwner {
+    ) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             addWhitelistERC721(tokens[i]);
         }
     }
-    function delWhitelistERC721(address token) public onlyOwner {
+    function delWhitelistERC721(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
+        require(whitelistERC721[token], "Token not in whitelist");
         whitelistERC721[token] = false;
         emit WhitelistERC721Updated(token, false);
     }
     function batchDelWhitelistERC721(
         address[] calldata tokens
-    ) external onlyOwner {
+    ) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             delWhitelistERC721(tokens[i]);
         }
@@ -703,26 +737,31 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Manages ERC1155 token whitelist
     /// @dev Whitelisted addresses can interact with the contract
     /// @param token - ERC1155 contract address
-    function addWhitelistERC1155(address token) public onlyOwner {
+    function addWhitelistERC1155(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
+    require(
+        IERC165(token).supportsInterface(type(IERC1155).interfaceId),
+        "Not ERC1155"
+    );
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Updated(token, true);
     }
     function batchAddWhitelistERC1155(
         address[] calldata tokens
-    ) external onlyOwner {
+    ) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             addWhitelistERC1155(tokens[i]);
         }
     }
-    function delWhitelistERC1155(address token) public onlyOwner {
+    function delWhitelistERC1155(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
+        require(whitelistERC1155[token], "Token not in whitelist");
         whitelistERC1155[token] = false;
         emit WhitelistERC1155Updated(token, false);
     }
     function batchDelWhitelistERC1155(
         address[] calldata tokens
-    ) external onlyOwner {
+    ) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             delWhitelistERC1155(tokens[i]);
         }
@@ -730,7 +769,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Initiates ownership transfer
     /// @dev Provides the current owner to transfer control to a new owner
     /// @param newOwner - Address of proposed new owner
-    function transferOwnership(address newOwner) external onlyOwner {
+    function transferOwnership(address newOwner) external onlyAdmin {
         require(newOwner != address(0), "Invalid owner address");
         pendingOwner = newOwner;
         emit OwnershipTransferInitiated(owner, newOwner);
@@ -738,6 +777,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Initiates confirmation of transfer of ownership
     /// @dev Provides the new owner the ability to take control from the current owner
     function acceptOwnership() external {
+        require(pendingOwner != address(0), "No pending owner");
         require(msg.sender == pendingOwner, "Not pending owner");
         emit OwnershipTransferred(owner, pendingOwner);
         owner = pendingOwner;
@@ -745,7 +785,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     }
     /// @notice Initiates completion of ownership transfer
     /// @dev Provides the current owner permanently transfer ownership to the new owner
-    function renounceOwnership() external onlyOwner {
+    function renounceOwnership() external onlyAdmin {
         require(pendingOwner == address(0), "Pending owner exists");
         emit OwnershipRenounced(owner);
         owner = address(0);
@@ -753,7 +793,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Emergency stop activation
     /// @dev Activates protection by disabling all contract functions
     /// @param reason - Reason for emergency stop (encoded in bytes32)
-    function emergencyStop(bytes32 reason) external onlyOwner {
+    function emergencyStop(bytes32 reason) external onlyAdmin {
         _wasPausedBeforeEmergency = paused();
         isEmergencyStopped = true;
         emergencyReason = reason;
@@ -764,7 +804,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     }
     /// @notice Emergency stop deactivation
     /// @dev Deactivates protection by enabling all contract functions
-    function liftEmergencyStop() external onlyOwner {
+    function liftEmergencyStop() external onlyAdmin {
         isEmergencyStopped = false;
         emergencyReason = "";
         if (!_wasPausedBeforeEmergency && paused()) {
@@ -787,13 +827,13 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         }
     }
     /// @notice Pauses contract operations
-    function pause() external onlyOwner {
+    function pause() external onlyRoot {
         require(!isEmergencyStopped, "Emergency stop active");
         _wasPausedBeforeEmergency = true;
         _pause();
     }
     /// @notice Unpauses contract operations
-    function unpause() external onlyOwner {
+    function unpause() external onlyRoot {
         require(!isEmergencyStopped, "Emergency stop active");
         _wasPausedBeforeEmergency = false;
         _unpause();
@@ -801,7 +841,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Transaction fee amount
     /// @dev Transaction fee amount, the value must be within the allowed range
     /// @param newFee - New fee value (in wei amount)
-    function setTaxFee(uint256 newFee) external onlyOwner {
+    function setTaxFee(uint256 newFee) external onlyAdmin {
         require(newFee >= minTaxFee && newFee <= maxTaxFee, "Invalid fee");
         taxFee = newFee;
     }
@@ -811,7 +851,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function requestWithdrawal(
         uint256 amount,
         bool isRoyalties
-    ) external onlyOwner noActiveWithdrawalRequest {
+    ) external onlyAdmin noActiveWithdrawalRequest {
         uint256 availableBalance;
         if (isRoyalties) {
             availableBalance = accumulatedRoyalties;
@@ -835,7 +875,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         emit WithdrawalRequested(amount, block.timestamp);
     }
     /// @notice Initiates cancellation of a pending withdrawal
-    function cancelWithdrawal() external onlyOwner {
+    function cancelWithdrawal() external onlyAdmin {
         require(
             withdrawalRequest.requestTime > 0,
             "No withdrawal request exists"
@@ -847,11 +887,12 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Completes withdrawal after delay
     function completeWithdrawal()
         external
-        onlyOwner
+        onlyAdmin
         nonReentrant
         canWithdraw
         isNotCancelled
     {
+        require(owner != address(0), "Owner not set");
         uint256 amount = withdrawalRequest.amount;
         bool isRoyalties = withdrawalRequest.isRoyalties;
         withdrawalRequest = WithdrawalRequest(0, 0, true, false);
