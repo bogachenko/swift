@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
+import "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 
 /// @title TransferSWIFT
 /// @author Bogachenko Vyacheslav
@@ -215,26 +216,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - ERC1155 contract address
     /// @param status - New status (true = allowed)
     event WhitelistERC1155Updated(address indexed token, bool status);
-    /// @notice Emitted when a role is granted to an account
-    /// @dev Generated during successful _grantRole executions
-    /// @param role - The bytes32 role identifier
-    /// @param account - The address that received the role
-    /// @param sender - The address that initiated the grant
-    event RoleGranted(
-        bytes32 indexed role,
-        address indexed account,
-        address indexed sender
-    );
-    /// @notice Emitted when a role is revoked from an account
-    /// @dev Generated during successful _revokeRole executions
-    /// @param role - The bytes32 role identifier
-    /// @param account - The address that lost the role
-    /// @param sender - The address that initiated the revocation
-    event RoleRevoked(
-        bytes32 indexed role,
-        address indexed account,
-        address indexed sender
-    );
 
     /*********************************************************************/
     /// @title Access Control Modifiers
@@ -578,7 +559,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Includes additional safeguards for role capacity limits
     /// @param role - The role identifier to grant (bytes32)
     /// @param account - The address receiving the role
-    function grantRole(bytes32 role, address account) external onlyAdmin {
+    function grantRole(bytes32 role, address account) public override(AccessControlEnumerable, IAccessControlEnumerable) onlyAdmin {
         require(account != address(0), "Zero address");
         require(!isContract(account), "Address must not be a contract");
         if (role == adminRole) {
@@ -596,7 +577,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function revokeRole(
         bytes32 role,
         address account
-    ) external onlyAdmin {
+    ) public override(AccessControlEnumerable, IAccessControlEnumerable) onlyAdmin {
         if (role == adminRole) {
             require(
                 getRoleMemberCount(adminRole) > 1,
