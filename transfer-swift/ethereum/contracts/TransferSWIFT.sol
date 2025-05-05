@@ -73,11 +73,14 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Default allowance: 15 recipients
     uint256 constant defaultRecipients = 15;
     /// @notice Maximum recipient limit
-    /// @dev Absolute maximum: 20 recipients
-    uint256 constant maxRecipients = 20;
+    /// @dev Absolute maximum: 30 recipients
+    uint256 constant maxRecipients = 30;
+    /// @notice Current allowed number of recipients per transaction
+    /// @dev Value range: [defaultRecipients, maxRecipients]
+    uint256 public currentRecipients = defaultRecipients;
     /// @notice Rate limiting duration
-    /// @dev Default value: 300 seconds (5 minutes)
-    uint256 public rateLimitDuration = 300;
+    /// @dev Default value: 60 seconds (1 minute)
+    uint256 public rateLimitDuration = 60;
     /// @notice Contract emergency stop flag
     /// @dev Blocking the main functions of the contract
     bool public isEmergencyStopped;
@@ -86,9 +89,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Emergency activation reason
     /// @dev Saving a hashed message describing the reason
     bytes32 public emergencyReason;
-    /// @notice Limit of failed transfers to automatically activate the emergency stop
-    /// @dev Only for the owner of the contract
-    uint256 public constant maxFailedTransfers = 3;
 
     /*********************************************************************/
     /// @title Contract access control and restrictions
@@ -136,6 +136,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         bool isCancelled;
         bool isRoyalties;
         uint256 availableEthBalance;
+        uint256 availableRoyaltiesBalance;
     }
 
     /*********************************************************************/
@@ -217,6 +218,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - ERC1155 contract address
     /// @param status - New status (true = allowed)
     event WhitelistERC1155Updated(address indexed token, bool status);
+    /// @notice Emitted when the transaction fee is updated
+    /// @dev Signals a change in the protocol's tax fee percentage
+    /// @param newFee - New fee value in wei
+    event TaxFeeUpdated(uint256 indexed newFee);
 
     /*********************************************************************/
     /// @title Access Control Modifiers
@@ -347,7 +352,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
-        require(recipients.length <= allowedRecipients, "Too many recipients");
+        require(recipients.length <= currentRecipients, "Too many recipients");
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             require(
@@ -363,22 +368,11 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             }
         }
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
-        uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             (bool success, ) = payable(recipients[i]).call{
                 value: amounts[i],
                 gas: 2300
             }("");
-            if (!success) {
-                localFails++;
-                if (
-                    hasRole(adminRole, msg.sender) &&
-                    localFails >= maxFailedTransfers
-                ) {
-                    _autoEmergency("Too many failed ETH transfers");
-                }
-                revert("ETH transfer failed");
-            }
             unchecked {
                 ++i;
             }
@@ -420,28 +414,17 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
-        require(recipients.length <= allowedRecipients, "Too many recipients");
+        require(recipients.length <= currentRecipients, "Too many recipients");
         IERC20 erc20 = IERC20(token);
         uint256 totalFee = taxFee * recipients.length;
         require(msg.value == totalFee, "Incorrect tax fee");
         accumulatedRoyalties += totalFee;
-        uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 amt = amounts[i];
             require(to != address(0) && !blacklist[to], "Invalid recipient");
             require(amt > 0, "Amount must be > 0");
             bool success = erc20.transferFrom(msg.sender, to, amt);
-            if (!success) {
-                localFails++;
-                if (
-                    hasRole(adminRole, msg.sender) &&
-                    localFails >= maxFailedTransfers
-                ) {
-                    _autoEmergency("Too many failed ERC20 transfers");
-                }
-                revert("ERC20 transfer failed");
-            }
             unchecked {
                 ++i;
             }
@@ -474,12 +457,11 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
-        require(recipients.length <= allowedRecipients, "Too many recipients");
+        require(recipients.length <= currentRecipients, "Too many recipients");
         IERC721 erc721 = IERC721(token);
         uint256 totalFee = taxFee * recipients.length;
         require(msg.value == totalFee, "Incorrect tax fee");
         accumulatedRoyalties += taxFee;
-        uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 id = tokenIds[i];
@@ -496,17 +478,9 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 );
             }
             try erc721.safeTransferFrom(msg.sender, to, id, "") {} catch {
-                localFails++;
-                if (
-                    hasRole(adminRole, msg.sender) &&
-                    localFails >= maxFailedTransfers
-                ) {
-                    _autoEmergency("Too many failed ERC721 transfers");
+                unchecked {
+                    ++i;
                 }
-                revert("ERC721 transfer failed");
-            }
-            unchecked {
-                ++i;
             }
         }
     }
@@ -542,12 +516,11 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
-        require(recipients.length <= allowedRecipients, "Too many recipients");
+        require(recipients.length <= currentRecipients, "Too many recipients");
         IERC1155 erc1155 = IERC1155(token);
         uint256 totalFee = taxFee * recipients.length;
         require(msg.value == totalFee, "Incorrect tax fee");
         accumulatedRoyalties += totalFee;
-        uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 id = ids[i];
@@ -577,21 +550,12 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 }
             }
             try erc1155.safeTransferFrom(msg.sender, to, id, amt, "") {} catch {
-                localFails++;
-                if (
-                    hasRole(adminRole, msg.sender) &&
-                    localFails >= maxFailedTransfers
-                ) {
-                    _autoEmergency("Too many failed ERC1155 transfers");
+                unchecked {
+                    ++i;
                 }
-                revert("ERC1155 transfer failed");
-            }
-            unchecked {
-                ++i;
             }
         }
     }
-
     /*********************************************************************/
     /// @title Contract Configuration
     /// @notice Functions for managing contract parameters
@@ -610,6 +574,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     {
         require(account != address(0), "Zero address");
         require(!isContract(account), "Address must not be a contract");
+        require(!hasRole(role, account), "Account already has this role");
         if (role == adminRole) {
             require(getRoleMemberCount(adminRole) < maxAdmins, "Max admins");
         }
@@ -661,6 +626,16 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         extendedRecipients[user] = false;
         emit DefaultRecipientsSet(user, defaultRecipients);
     }
+    /// @notice Current recipients limit
+    /// @dev Updates the allowed number of recipients for a single transaction
+    /// @param newLimit - New recipient limit to set
+    function updateSetRecipients(uint256 newLimit) external onlyRoot {
+        require(
+            newLimit >= defaultRecipients && newLimit <= maxRecipients,
+            "Limit out of bounds"
+        );
+        setRecipients = newLimit;
+    }
     /// @notice Address type
     /// @dev Uses low-level EVM opcode to check for deployed code
     /// @param account - Address to check
@@ -708,10 +683,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - ERC20 contract address
     function addWhitelistERC20(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
-        require(
-            IERC165(token).supportsInterface(type(IERC20).interfaceId),
-            "Not ERC20"
-        );
         whitelistERC20[token] = true;
         emit WhitelistERC20Updated(token, true);
     }
@@ -740,10 +711,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - ERC721 contract address
     function addWhitelistERC721(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
-        require(
-            IERC165(token).supportsInterface(type(IERC721).interfaceId),
-            "Not ERC721"
-        );
         whitelistERC721[token] = true;
         emit WhitelistERC721Updated(token, true);
     }
@@ -772,10 +739,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - ERC1155 contract address
     function addWhitelistERC1155(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
-        require(
-            IERC165(token).supportsInterface(type(IERC1155).interfaceId),
-            "Not ERC1155"
-        );
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Updated(token, true);
     }
@@ -845,20 +808,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         }
         emit EmergencyStopLifted(msg.sender);
     }
-    /// @notice Automatic emergency stop
-    /// @dev Internal function for protocol self-protection mechanisms
-    /// @param reasonText - Human-readable emergency reason (will be hashed)
-    function _autoEmergency(string memory reasonText) internal {
-        bytes32 reason = keccak256(abi.encodePacked(reasonText));
-        if (isEmergencyStopped) return;
-        _wasPausedBeforeEmergency = paused();
-        isEmergencyStopped = true;
-        emergencyReason = reason;
-        if (!_wasPausedBeforeEmergency) {
-            _pause();
-            emit EmergencyStopActivated(address(this), reason);
-        }
-    }
     /// @notice Pauses contract operations
     function pause() external onlyRoot {
         require(!isEmergencyStopped, "Emergency stop active");
@@ -877,6 +826,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function setTaxFee(uint256 newFee) external onlyAdmin {
         require(newFee >= minTaxFee && newFee <= maxTaxFee, "Invalid fee");
         taxFee = newFee;
+        emit TaxFeeUpdated(newFee);
     }
     /// @notice Initiates withdrawal process
     /// @param amount - Amount to withdraw (in wei amount)
@@ -885,27 +835,28 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         uint256 amount,
         bool isRoyalties
     ) external onlyAdmin noActiveWithdrawalRequest {
-        uint256 availableBalance;
         if (isRoyalties) {
-            availableBalance = accumulatedRoyalties;
-            require(
-                amount > 0 && amount <= availableBalance,
-                "Invalid amount or insufficient royalties"
-            );
+            require(amount <= accumulatedRoyalties, "Insufficient royalties");
+            withdrawalRequest = WithdrawalRequest({
+                amount: amount,
+                requestTime: block.timestamp,
+                isCancelled: false,
+                isRoyalties: true,
+                availableEthBalance: 0,
+                availableRoyaltiesBalance: accumulatedRoyalties
+            });
         } else {
-            availableBalance = address(this).balance - accumulatedRoyalties;
-            require(
-                amount > 0 && amount <= availableBalance,
-                "Invalid amount or insufficient funds"
-            );
+            uint256 availableBalance = address(this).balance -
+                accumulatedRoyalties;
+            require(amount <= availableBalance, "Insufficient ETH");
+            withdrawalRequest = WithdrawalRequest({
+                amount: amount,
+                requestTime: block.timestamp,
+                isCancelled: false,
+                isRoyalties: false,
+                availableEthBalance: availableBalance
+            });
         }
-        withdrawalRequest = WithdrawalRequest({
-            amount: amount,
-            requestTime: block.timestamp,
-            isCancelled: false,
-            isRoyalties: isRoyalties,
-            availableEthBalance: isRoyalties ? 0 : availableBalance
-        });
         emit WithdrawalRequested(amount, block.timestamp);
     }
     /// @notice Initiates cancellation of a pending withdrawal
@@ -930,27 +881,19 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         uint256 amount = withdrawalRequest.amount;
         bool isRoyalties = withdrawalRequest.isRoyalties;
         uint256 availableEthBalance = withdrawalRequest.availableEthBalance;
-        if (!isRoyalties) {
-            uint256 currentAvailableBalance = address(this).balance -
-                accumulatedRoyalties;
-            require(
-                currentAvailableBalance >= availableEthBalance,
-                "ETH balance decreased after request"
-            );
-            require(
-                currentAvailableBalance >= amount,
-                "Insufficient ETH after balance check"
-            );
-            withdrawalRequest = WithdrawalRequest(0, 0, true, false, 0);
-            if (isRoyalties) {
-                accumulatedRoyalties -= amount;
-            }
-            (bool success, ) = payable(owner).call{value: amount, gas: 50000}(
-                ""
-            );
-            require(success, "ETH transfer failed");
-            emit WithdrawalCompleted(amount);
+        uint256 availableRoyaltiesBalance = withdrawalRequest.availableRoyaltiesBalance;
+        if (isRoyalties) {
+        require(amount <= availableRoyaltiesBalance, "Insufficient royalties");
+        accumulatedRoyalties -= amount;
+        } else {
+        uint256 currentAvailableBalance = address(this).balance - accumulatedRoyalties;
+        require(currentAvailableBalance >= availableEthBalance, "ETH balance decreased");
+        require(amount <= availableEthBalance, "Requested ETH exceeds available");
         }
+        withdrawalRequest = WithdrawalRequest(0, 0, true, false, 0, 0);
+        (bool success, ) = payable(owner).call{value: amount, gas: 50000}("");
+        require(success, "Transfer failed");
+        emit WithdrawalCompleted(amount);
     }
     /// @notice Interfaces support
     /// @dev Low-level query to check supported interfaces
