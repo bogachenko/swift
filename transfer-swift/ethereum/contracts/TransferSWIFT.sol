@@ -135,6 +135,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         uint256 requestTime;
         bool isCancelled;
         bool isRoyalties;
+        uint256 availableEthBalance;
     }
 
     /*********************************************************************/
@@ -264,8 +265,8 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             block.timestamp >= lastUsed[msg.sender] + rateLimitDuration,
             "Rate limit: Wait cooldown period"
         );
-        _;
         lastUsed[msg.sender] = block.timestamp;
+        _;
     }
     /// @notice Emergency stop status
     /// @dev Ensures emergency stop is not active
@@ -364,7 +365,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
         uint256 localFails = 0;
         for (uint256 i = 0; i < recipients.length; ) {
-            accumulatedRoyalties += taxFee;
             (bool success, ) = payable(recipients[i]).call{
                 value: amounts[i],
                 gas: 2300
@@ -383,6 +383,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 ++i;
             }
         }
+        accumulatedRoyalties += taxFee;
         uint256 refund = msg.value - totalAmount - taxFee;
         if (refund > 0) {
             (bool refundSuccess, ) = payable(msg.sender).call{
@@ -412,6 +413,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(token != address(0), "Invalid token address");
         require(whitelistERC20[token], "Token not whitelisted");
         require(recipients.length == amounts.length, "Mismatched arrays");
+        require(
+            IERC165(token).supportsInterface(type(IERC20).interfaceId),
+            "Not an ERC20 token"
+        );
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
@@ -462,6 +467,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(token != address(0), "Invalid token address");
         require(whitelistERC721[token], "Token not whitelisted");
         require(recipients.length == tokenIds.length, "Mismatched arrays");
+        require(
+            IERC165(token).supportsInterface(type(IERC721).interfaceId),
+            "Not an ERC721 token"
+        );
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
@@ -475,7 +484,17 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             address to = recipients[i];
             uint256 id = tokenIds[i];
             require(to != address(0) && !blacklist[to], "Invalid recipient");
-            require(erc721.ownerOf(id) == msg.sender, "Not owner of tokenId");
+            if (isContract(to)) {
+                require(
+                    IERC721Receiver(to).onERC721Received(
+                        msg.sender,
+                        msg.sender,
+                        id,
+                        ""
+                    ) == IERC721Receiver.onERC721Received.selector,
+                    "ERC721: Receiver rejected"
+                );
+            }
             try erc721.safeTransferFrom(msg.sender, to, id, "") {} catch {
                 localFails++;
                 if (
@@ -516,6 +535,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             recipients.length == ids.length && ids.length == amounts.length,
             "Mismatched arrays"
         );
+        require(
+            IERC165(token).supportsInterface(type(IERC1155).interfaceId),
+            "Not an ERC1155 token"
+        );
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
@@ -535,6 +558,24 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 "Not enough balance"
             );
             require(amt > 0, "Amount must be > 0");
+            if (isContract(to)) {
+                try
+                    IERC1155Receiver(to).onERC1155Received(
+                        msg.sender,
+                        msg.sender,
+                        id,
+                        amt,
+                        ""
+                    )
+                returns (bytes4 response) {
+                    require(
+                        response == IERC1155Receiver.onERC1155Received.selector,
+                        "ERC1155: Receiver rejected"
+                    );
+                } catch {
+                    revert("ERC1155: Transfer to non-receiver contract");
+                }
+            }
             try erc1155.safeTransferFrom(msg.sender, to, id, amt, "") {} catch {
                 localFails++;
                 if (
@@ -559,7 +600,14 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Includes additional safeguards for role capacity limits
     /// @param role - The role identifier to grant (bytes32)
     /// @param account - The address receiving the role
-    function grantRole(bytes32 role, address account) public override(AccessControlEnumerable, IAccessControlEnumerable) onlyAdmin {
+    function grantRole(
+        bytes32 role,
+        address account
+    )
+        public
+        override(AccessControlEnumerable, IAccessControlEnumerable)
+        onlyAdmin
+    {
         require(account != address(0), "Zero address");
         require(!isContract(account), "Address must not be a contract");
         if (role == adminRole) {
@@ -577,7 +625,11 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function revokeRole(
         bytes32 role,
         address account
-    ) public override(AccessControlEnumerable, IAccessControlEnumerable) onlyAdmin {
+    )
+        public
+        override(AccessControlEnumerable, IAccessControlEnumerable)
+        onlyAdmin
+    {
         if (role == adminRole) {
             require(
                 getRoleMemberCount(adminRole) > 1,
@@ -657,9 +709,9 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function addWhitelistERC20(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
         require(
-        IERC165(token).supportsInterface(type(IERC20).interfaceId),
-        "Not ERC20"
-    );
+            IERC165(token).supportsInterface(type(IERC20).interfaceId),
+            "Not ERC20"
+        );
         whitelistERC20[token] = true;
         emit WhitelistERC20Updated(token, true);
     }
@@ -688,10 +740,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - ERC721 contract address
     function addWhitelistERC721(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
-    require(
-        IERC165(token).supportsInterface(type(IERC721).interfaceId),
-        "Not ERC721"
-    );
+        require(
+            IERC165(token).supportsInterface(type(IERC721).interfaceId),
+            "Not ERC721"
+        );
         whitelistERC721[token] = true;
         emit WhitelistERC721Updated(token, true);
     }
@@ -720,10 +772,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - ERC1155 contract address
     function addWhitelistERC1155(address token) public onlyRoot {
         require(isContract(token), "Address must be a contract");
-    require(
-        IERC165(token).supportsInterface(type(IERC1155).interfaceId),
-        "Not ERC1155"
-    );
+        require(
+            IERC165(token).supportsInterface(type(IERC1155).interfaceId),
+            "Not ERC1155"
+        );
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Updated(token, true);
     }
@@ -851,7 +903,8 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             amount: amount,
             requestTime: block.timestamp,
             isCancelled: false,
-            isRoyalties: isRoyalties
+            isRoyalties: isRoyalties,
+            availableEthBalance: isRoyalties ? 0 : availableBalance
         });
         emit WithdrawalRequested(amount, block.timestamp);
     }
@@ -876,13 +929,28 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(owner != address(0), "Owner not set");
         uint256 amount = withdrawalRequest.amount;
         bool isRoyalties = withdrawalRequest.isRoyalties;
-        withdrawalRequest = WithdrawalRequest(0, 0, true, false);
-        if (isRoyalties) {
-            accumulatedRoyalties -= amount;
-        } else {}
-        (bool success, ) = payable(owner).call{value: amount, gas: 2300}("");
-        require(success, "ETH transfer failed");
-        emit WithdrawalCompleted(amount);
+        uint256 availableEthBalance = withdrawalRequest.availableEthBalance;
+        if (!isRoyalties) {
+            uint256 currentAvailableBalance = address(this).balance -
+                accumulatedRoyalties;
+            require(
+                currentAvailableBalance >= availableEthBalance,
+                "ETH balance decreased after request"
+            );
+            require(
+                currentAvailableBalance >= amount,
+                "Insufficient ETH after balance check"
+            );
+            withdrawalRequest = WithdrawalRequest(0, 0, true, false, 0);
+            if (isRoyalties) {
+                accumulatedRoyalties -= amount;
+            }
+            (bool success, ) = payable(owner).call{value: amount, gas: 50000}(
+                ""
+            );
+            require(success, "ETH transfer failed");
+            emit WithdrawalCompleted(amount);
+        }
     }
     /// @notice Interfaces support
     /// @dev Low-level query to check supported interfaces
