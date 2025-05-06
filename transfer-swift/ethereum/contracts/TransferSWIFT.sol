@@ -11,6 +11,8 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
 
 /// @title TransferSWIFT
 /// @author Bogachenko Vyacheslav
@@ -48,11 +50,11 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// - 0x69734552433230 ("isERC20"): ERC20 token withdrawal
     /// - 0x6973455243373231 ("isERC721"): ERC721 NFT withdrawal
     /// - 0x697345524331313535 ("isERC1155"): ERC1155 token withdrawal
-    bytes32 public constant withdrawalTypeRoyalties = 0x6973526f79616c74696573;
-    bytes32 public constant withdrawalTypeETH = 0x6973455448;
-    bytes32 public constant withdrawalTypeERC20 = 0x69734552433230;
-    bytes32 public constant withdrawalTypeERC721 = 0x6973455243373231;
-    bytes32 public constant withdrawalTypeERC1155 = 0x697345524331313535;
+    bytes32 public constant withdrawalTypeRoyalties = "isRoyalties";
+    bytes32 public constant withdrawalTypeETH = "isETH";
+    bytes32 public constant withdrawalTypeERC20 = "isERC20";
+    bytes32 public constant withdrawalTypeERC721 = "isERC721";
+    bytes32 public constant withdrawalTypeERC1155 = "isERC1155";
     /// @notice Address library for safe ETH operations
     using Address for address payable;
     /// @notice SafeERC20 library for safe ERC-20 operations
@@ -154,7 +156,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     }
 
     /*********************************************************************/
-    /// @title Contract Lifecycle Events
+    /// @title Contract lifecycle events
     /// @notice Events related to contract configuration changes
     /*********************************************************************/
     /// @notice Emitted when ownership transfer is completed
@@ -245,15 +247,26 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - Address of token contract
     /// @param from - Initiating address
     /// @param to - Recipient address
-    /// @param id - Token ID (for ERC721/ERC1155)
+    /// @param tokenId - Token ID (for ERC721/ERC1155)
     /// @param reason - Failure reason string or error code
-    event TokenTransferFailed(address token, address from, address to, uint256 tokenId, string reason);
+    event TokenTransferFailed(
+        address token,
+        address from,
+        address to,
+        uint256 tokenId,
+        string reason
+    );
     /// @notice Emitted when a token transfer succeeds
     /// @param token - Address of token contract
     /// @param from - Initiating address
     /// @param to - Recipient address
-    /// @param id - Transferred token ID
-    event TokenTransferSucceeded(address token, address from, address to, uint256 tokenId);
+    /// @param tokenId - Transferred token ID
+    event TokenTransferSucceeded(
+        address token,
+        address from,
+        address to,
+        uint256 tokenId
+    );
 
     /*********************************************************************/
     /// @title Access Control Modifiers
@@ -381,6 +394,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         emergencyNotActive
     {
         require(recipients.length == amounts.length, "Mismatched arrays");
+        require(recipients.length > 0, "Empty recipient array");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
@@ -401,8 +415,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         }
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
         for (uint256 i = 0; i < recipients.length; ) {
-        (bool success, ) = payable(recipients[i]).call{value: amounts[i]}("");
-        require(success, "ETH transfer failed");
+            (bool success, ) = payable(recipients[i]).call{value: amounts[i]}(
+                ""
+            );
+            require(success, "ETH transfer failed");
             unchecked {
                 ++i;
             }
@@ -437,6 +453,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(token != address(0), "Invalid token address");
         require(whitelistERC20[token], "Token not whitelisted");
         require(recipients.length == amounts.length, "Mismatched arrays");
+        require(recipients.length > 0, "Empty recipient array");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
@@ -476,6 +493,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(token != address(0), "Invalid token address");
         require(whitelistERC721[token], "Token not whitelisted");
         require(recipients.length == tokenIds.length, "Mismatched arrays");
+        require(recipients.length > 0, "Empty recipient array");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
@@ -489,27 +507,30 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             uint256 id = tokenIds[i];
             require(to != address(0) && !blacklist[to], "Invalid recipient");
             if (isContract(to)) {
-                require(
-                    IERC721Receiver(to).onERC721Received(
-                        msg.sender,
-                        msg.sender,
-                        id,
-                        ""
-                    ) == IERC721Receiver.onERC721Received.selector,
-                    "ERC721: Receiver rejected"
-                );
+               require(IERC721Receiver(to).onERC721Received(msg.sender, msg.sender, id, "")== IERC721Receiver.onERC721Received.selector,"ERC721: Receiver rejected");
+            }
             try erc721.safeTransferFrom(msg.sender, to, id, "") {
-            emit TokenTransferSucceeded(token, msg.sender, to, id);
+                emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
-            emit TokenTransferFailed(token, msg.sender, to, id, reason);
-            revert(string(abi.encodePacked("ERC721 transfer failed: ", reason)));
+                emit TokenTransferFailed(token, msg.sender, to, id, reason);
+                revert(
+                    string(abi.encodePacked("ERC721 transfer failed: ", reason))
+                );
             } catch {
-            emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
-            revert("ERC721 transfer failed with unknown error");
+                emit TokenTransferFailed(
+                    token,
+                    msg.sender,
+                    to,
+                    id,
+                    "unknown error"
+                );
+                revert("ERC721 transfer failed with unknown error");
+                unchecked {
+                    ++i;
+                }
             }
         }
     }
-}
     /// @notice Multitransfer ERC1155
     /// @dev Batch transfers ERC1155 to multiple recipients
     /// @param token - ERC1155 contract address
@@ -531,10 +552,8 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     {
         require(token != address(0), "Invalid token address");
         require(whitelistERC1155[token], "Token not whitelisted");
-        require(
-            recipients.length == ids.length && ids.length == amounts.length,
-            "Mismatched arrays"
-        );
+        require(recipients.length == ids.length && ids.length == amounts.length,"Mismatched arrays");
+        require(recipients.length > 0, "Empty recipient array");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
@@ -554,14 +573,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             );
             require(amt > 0, "Amount must be > 0");
             if (isContract(to)) {
-                try
-                    IERC1155Receiver(to).onERC1155Received(
-                        msg.sender,
-                        msg.sender,
-                        id,
-                        amt,
-                        ""
-                    )
+                try IERC1155Receiver(to).onERC1155Received(msg.sender, msg.sender, id, amt, "")
                 returns (bytes4 response) {
                     require(
                         response == IERC1155Receiver.onERC1155Received.selector,
@@ -571,16 +583,34 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
                     revert("ERC1155: Transfer to non-receiver contract");
                 }
             }
-            try erc1155.safeTransferFrom(msg.sender, to, id, amount, "") {
-            emit TokenTransferSucceeded(token, msg.sender, to, id, amount);
-        } catch Error(string memory reason) {
-            emit TokenTransferFailed(token, msg.sender, to, id, amount, reason);
-            revert(string(abi.encodePacked("ERC1155 transfer failed: ", reason)));
-        } catch (bytes memory) {
-            emit TokenTransferFailed(token, msg.sender, to, id, amount, "unknown error");
-            revert("ERC1155 transfer failed with unknown error");
-        }
-        unchecked { ++i; }
+            try erc1155.safeTransferFrom(msg.sender, to, id, amounts, "") {
+                emit TokenTransferSucceeded(token, msg.sender, to, id);
+            } catch Error(string memory reason) {
+                emit TokenTransferFailed(
+                    token,
+                    msg.sender,
+                    to,
+                    id,
+                    reason
+                );
+                revert(
+                    string(
+                        abi.encodePacked("ERC1155 transfer failed: ", reason)
+                    )
+                );
+            } catch (bytes memory) {
+                emit TokenTransferFailed(
+                    token,
+                    msg.sender,
+                    to,
+                    id,
+                    amounts,
+                    "unknown error"
+                );
+                revert("ERC1155 transfer failed with unknown error");
+                unchecked {
+                    ++i;
+                }
             }
         }
     }
@@ -597,7 +627,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         address account
     )
         public
-        override(AccessControlEnumerable, IAccessControlEnumerable)
+        override(AccessControl, IAccessControl)
         onlyAdmin
     {
         require(account != address(0), "Zero address");
@@ -620,7 +650,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         address account
     )
         public
-        override(AccessControlEnumerable, IAccessControlEnumerable)
+        override(AccessControl, IAccessControl)
         onlyAdmin
     {
         if (role == adminRole) {
@@ -857,12 +887,12 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         taxFee = newFee;
         emit TaxFeeUpdated(newFee);
     }
-/// @notice Withdrawal request
-/// @dev Supports multiple asset types through withdrawalType parameter
-/// @param amount - Withdrawal amount
-/// @param withdrawalType - Withdrawal category identifier:
-/// @param tokenAddress - Token contract address (required for ERC20/ERC721/ERC1155)
-/// @param tokenId - Token ID (required for ERC721/ERC1155)
+    /// @notice Withdrawal request
+    /// @dev Supports multiple asset types through `withdrawalType` parameter
+    /// @param amount - Withdrawal amount
+    /// @param withdrawalType - Withdrawal category identifier
+    /// @param tokenAddress - Token contract address (required for ERC20/ERC721/ERC1155)
+    /// @param tokenId - Token ID (required for ERC721/ERC1155)
     function requestWithdrawal(
         uint256 amount,
         bytes32 withdrawalType,
