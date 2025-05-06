@@ -39,8 +39,8 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Stores pending request details (address, amount, timestamp)
     WithdrawalRequest public withdrawalRequest;
     /// @notice Royalty withdrawal cooldown period
-    /// @dev Security delay of 3 days (3 * 86400 seconds)
-    uint256 public constant withdrawalDelay = 259200 seconds;
+    /// @dev Security delay of 1 day (or 86400 seconds)
+    uint256 public constant withdrawalDelay = 86400 seconds;
     /// @notice Address library for safe ETH operations
     using Address for address payable;
     /// @notice SafeERC20 library for safe ERC-20 operations
@@ -134,7 +134,9 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         uint256 amount;
         uint256 requestTime;
         bool isCancelled;
-        bool isRoyalties;
+        bytes32 withdrawalType;
+        address tokenAddress;
+        uint256 tokenId;
         uint256 availableEthBalance;
         uint256 availableRoyaltiesBalance;
     }
@@ -407,10 +409,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(token != address(0), "Invalid token address");
         require(whitelistERC20[token], "Token not whitelisted");
         require(recipients.length == amounts.length, "Mismatched arrays");
-        require(
-            IERC165(token).supportsInterface(type(IERC20).interfaceId),
-            "Not an ERC20 token"
-        );
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
@@ -450,10 +448,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(token != address(0), "Invalid token address");
         require(whitelistERC721[token], "Token not whitelisted");
         require(recipients.length == tokenIds.length, "Mismatched arrays");
-        require(
-            IERC165(token).supportsInterface(type(IERC721).interfaceId),
-            "Not an ERC721 token"
-        );
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
             : defaultRecipients;
@@ -508,10 +502,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(
             recipients.length == ids.length && ids.length == amounts.length,
             "Mismatched arrays"
-        );
-        require(
-            IERC165(token).supportsInterface(type(IERC1155).interfaceId),
-            "Not an ERC1155 token"
         );
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
@@ -828,34 +818,102 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         taxFee = newFee;
         emit TaxFeeUpdated(newFee);
     }
-    /// @notice Initiates withdrawal process
-    /// @param amount - Amount to withdraw (in wei amount)
-    /// @param isRoyalties - True for royalties, false for ETH
+/// @notice Withdrawal request
+/// @dev Supports multiple asset types through withdrawalType parameter
+/// @param amount - Withdrawal amount
+/// @param withdrawalType - Withdrawal category identifier:
+/// - 0x6973526f79616c74696573 ("isRoyalties"): Protocol royalties withdrawal
+/// - 0x6973455448 ("isETH"): Native ETH withdrawal
+/// - 0x69734552433230 ("isERC20"): ERC20 token withdrawal
+/// - 0x6973455243373231 ("isERC721"): ERC721 NFT withdrawal
+/// - 0x697345524331313535 ("isERC1155"): ERC1155 token withdrawal
+/// @param tokenAddress - Token contract address (required for ERC20/ERC721/ERC1155)
+/// @param tokenId - Token ID (required for ERC721/ERC1155)
     function requestWithdrawal(
         uint256 amount,
-        bool isRoyalties
+        bytes32 withdrawalType,
+        address tokenAddress,
+        uint256 tokenId
     ) external onlyAdmin noActiveWithdrawalRequest {
-        if (isRoyalties) {
-            require(amount <= accumulatedRoyalties, "Insufficient royalties");
+        uint256 availableEthBalance = address(this).balance -
+            accumulatedRoyalties;
+
+        if (withdrawalType == 0x6973526f79616c74696573) {
+            require(
+                amount > 0 && amount <= accumulatedRoyalties,
+                "Invalid royalties"
+            );
             withdrawalRequest = WithdrawalRequest({
                 amount: amount,
                 requestTime: block.timestamp,
                 isCancelled: false,
-                isRoyalties: true,
+                withdrawalType: withdrawalType,
+                tokenAddress: address(0),
+                tokenId: 0,
                 availableEthBalance: 0,
                 availableRoyaltiesBalance: accumulatedRoyalties
             });
-        } else {
-            uint256 availableBalance = address(this).balance -
-                accumulatedRoyalties;
-            require(amount <= availableBalance, "Insufficient ETH");
+        } else if (withdrawalType == 0x6973455448) {
+            require(amount > 0 && amount <= availableEthBalance, "Invalid ETH");
             withdrawalRequest = WithdrawalRequest({
                 amount: amount,
                 requestTime: block.timestamp,
                 isCancelled: false,
-                isRoyalties: false,
-                availableEthBalance: availableBalance
+                withdrawalType: withdrawalType,
+                tokenAddress: address(0),
+                tokenId: 0,
+                availableEthBalance: availableEthBalance,
+                availableRoyaltiesBalance: 0
             });
+        } else if (withdrawalType == 0x69734552433230) {
+            require(tokenAddress != address(0), "Token address required");
+            uint256 balance = IERC20(tokenAddress).balanceOf(address(this));
+            require(amount > 0 && amount <= balance, "Invalid ERC20 amount");
+            withdrawalRequest = WithdrawalRequest({
+                amount: amount,
+                requestTime: block.timestamp,
+                isCancelled: false,
+                withdrawalType: withdrawalType,
+                tokenAddress: tokenAddress,
+                tokenId: 0,
+                availableEthBalance: 0,
+                availableRoyaltiesBalance: 0
+            });
+        } else if (withdrawalType == 0x6973455243373231) {
+            require(tokenAddress != address(0), "Token address required");
+            require(
+                IERC721(tokenAddress).ownerOf(tokenId) == address(this),
+                "ERC721 not owned"
+            );
+            withdrawalRequest = WithdrawalRequest({
+                amount: 1,
+                requestTime: block.timestamp,
+                isCancelled: false,
+                withdrawalType: withdrawalType,
+                tokenAddress: tokenAddress,
+                tokenId: tokenId,
+                availableEthBalance: 0,
+                availableRoyaltiesBalance: 0
+            });
+        } else if (withdrawalType == 0x697345524331313535) {
+            require(tokenAddress != address(0), "Token address required");
+            uint256 balance = IERC1155(tokenAddress).balanceOf(
+                address(this),
+                tokenId
+            );
+            require(amount > 0 && amount <= balance, "Invalid ERC1155 amount");
+            withdrawalRequest = WithdrawalRequest({
+                amount: amount,
+                requestTime: block.timestamp,
+                isCancelled: false,
+                withdrawalType: withdrawalType,
+                tokenAddress: tokenAddress,
+                tokenId: tokenId,
+                availableEthBalance: 0,
+                availableRoyaltiesBalance: 0
+            });
+        } else {
+            revert("Unsupported withdrawal type");
         }
         emit WithdrawalRequested(amount, block.timestamp);
     }
@@ -879,20 +937,79 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     {
         require(owner != address(0), "Owner not set");
         uint256 amount = withdrawalRequest.amount;
-        bool isRoyalties = withdrawalRequest.isRoyalties;
-        uint256 availableEthBalance = withdrawalRequest.availableEthBalance;
-        uint256 availableRoyaltiesBalance = withdrawalRequest.availableRoyaltiesBalance;
-        if (isRoyalties) {
-        require(amount <= availableRoyaltiesBalance, "Insufficient royalties");
-        accumulatedRoyalties -= amount;
+        bytes32 withdrawalType = withdrawalRequest.withdrawalType;
+        address tokenAddress = withdrawalRequest.tokenAddress;
+        uint256 tokenId = withdrawalRequest.tokenId;
+
+        if (withdrawalType == 0x6973526f79616c74696573) {
+            require(
+                amount <= withdrawalRequest.availableRoyaltiesBalance,
+                "Royalties reduced"
+            );
+            accumulatedRoyalties -= amount;
+            (bool success, ) = payable(owner).call{value: amount, gas: 50000}(
+                ""
+            );
+            require(success, "ETH (royalties) transfer failed");
+        } else if (withdrawalType == 0x6973455448) {
+            uint256 currentAvailable = address(this).balance -
+                accumulatedRoyalties;
+            require(
+                currentAvailable >= withdrawalRequest.availableEthBalance,
+                "ETH balance reduced"
+            );
+            require(
+                amount <= withdrawalRequest.availableEthBalance,
+                "ETH over requested"
+            );
+            (bool success, ) = payable(owner).call{value: amount, gas: 50000}(
+                ""
+            );
+            require(success, "ETH transfer failed");
+        } else if (withdrawalType == 0x69734552433230) {
+            require(
+                IERC20(tokenAddress).balanceOf(address(this)) >= amount,
+                "ERC20 insufficient"
+            );
+            bool sent = IERC20(tokenAddress).transfer(owner, amount);
+            require(sent, "ERC20 transfer failed");
+        } else if (withdrawalType == 0x6973455243373231) {
+            require(
+                IERC721(tokenAddress).ownerOf(tokenId) == address(this),
+                "Not owner of ERC721"
+            );
+            IERC721(tokenAddress).safeTransferFrom(
+                address(this),
+                owner,
+                tokenId
+            );
+        } else if (withdrawalType == 0x697345524331313535) {
+            require(
+                IERC1155(tokenAddress).balanceOf(address(this), tokenId) >=
+                    amount,
+                "ERC1155 insufficient"
+            );
+            IERC1155(tokenAddress).safeTransferFrom(
+                address(this),
+                owner,
+                tokenId,
+                amount,
+                ""
+            );
         } else {
-        uint256 currentAvailableBalance = address(this).balance - accumulatedRoyalties;
-        require(currentAvailableBalance >= availableEthBalance, "ETH balance decreased");
-        require(amount <= availableEthBalance, "Requested ETH exceeds available");
+            revert("Unsupported withdrawal type");
         }
-        withdrawalRequest = WithdrawalRequest(0, 0, true, false, 0, 0);
-        (bool success, ) = payable(owner).call{value: amount, gas: 50000}("");
-        require(success, "Transfer failed");
+
+        withdrawalRequest = WithdrawalRequest(
+            0,
+            0,
+            true,
+            "",
+            address(0),
+            0,
+            0,
+            0
+        );
         emit WithdrawalCompleted(amount);
     }
     /// @notice Interfaces support
