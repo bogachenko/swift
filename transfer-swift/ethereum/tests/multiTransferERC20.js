@@ -1,190 +1,300 @@
-const hre = require("hardhat"),
-	readline = require("readline"),
-	rl = readline.createInterface({
-		input: process.stdin,
-		output: process.stdout
-	}),
-	question = e => new Promise((o => rl.question(e, o)));
+const hre = require("hardhat");
+const readline = require("readline");
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+const question = (query) => new Promise((resolve) => rl.question(query, resolve));
 
-function isValidAmount(e) {
-	return !(!/^-?\d*\.?\d+$/.test(e) || e.startsWith("-"))
+function isValidAmount(amount) {
+    if (!/^-?\d*\.?\d+$/.test(amount)) {
+        return false;
+    }
+    if (amount.startsWith('-')) {
+        return false;
+    }
+    return true;
 }
 async function main() {
-	console.log("TransferSWIFT - Multiple ERC20 transfer script");
-	try {
-		let e = hre.network.name;
-		console.log(`Using network: ${e}`);
-		let o, {
-			ethers: t
-		} = hre;
-		switch (e) {
-			case "mainnet":
-				o = process.env.MAINNET_CONTRACT_ADDRESS;
-				break;
-			case "sepolia":
-				o = process.env.SEPOLIA_CONTRACT_ADDRESS;
-				break;
-			case "holesky":
-				o = process.env.HOLESKY_CONTRACT_ADDRESS;
-				break;
-			default:
-				throw Error(`Unsupported network: ${e}. Please use mainnet, sepolia, or holesky.`)
-		}
-		if (!o) throw Error(`Contract address not found for ${e} network. Check your environment variables.`);
-		let n = ["function name() view returns (string)", "function symbol() view returns (string)", "function decimals() view returns (uint8)", "function balanceOf(address) view returns (uint256)", "function allowance(address owner, address spender) view returns (uint256)", "function approve(address spender, uint256 amount) returns (bool)"],
-			[s] = await t.getSigners(),
-			r = new t.Contract(o, ["function multiTransferERC20(address token, address[] calldata recipients, uint256[] calldata amounts) external payable", "function taxFee() view returns (uint256)", "function blacklist(address) view returns (bool)", "function lastUsed(address) view returns (uint256)", "function rateLimitDuration() view returns (bool)", "function extendedRecipients(address) view returns (bool)", "function paused() view returns (bool)", "function isEmergencyStopped() view returns (bool)", "function whitelistERC20(address) view returns (bool)"], s);
-		console.log(`Connected with address: ${s.address}`);
-		let a = await t.provider.getBalance(s.address);
-		console.log(`Wallet balance: ${t.formatEther(a)} ETH`), console.log(`Contract address: ${o}`);
-		try {
-			await r.paused() && console.log("\n⚠️ WARNING: Contract is currently PAUSED! Transactions will fail. ⚠️\n")
-		} catch (e) {
-			console.log("Could not check if contract is paused.")
-		}
-		try {
-			await r.isEmergencyStopped() && console.log("\n⚠️ WARNING: Contract EMERGENCY STOP is active! Transactions will fail. ⚠️\n")
-		} catch (e) {
-			console.log("Could not check if emergency stop is active.")
-		}
-		try {
-			await r.blacklist(s.address) && console.log("\n⚠️ WARNING: Your address is blacklisted! Transactions will fail. ⚠️\n")
-		} catch (e) {
-			console.log("Could not check blacklist status.")
-		}
-		try {
-			let e = await r.lastUsed(s.address),
-				o = await r.rateLimitDuration(),
-				t = Math.floor(Date.now() / 1e3),
-				n = Number(e) + Number(o);
-			n > t && console.log(`\n⚠️ WARNING: Rate limit in effect. You need to wait approximately ${Math.ceil((n-t)/60)} minute(s) before sending another transaction. ⚠️\n`)
-		} catch (e) {
-			console.log("Could not check rate limit status.")
-		}
-		let i, l = !1;
-		try {
-			l = await r.extendedRecipients(s.address);
-			let e = l ? 20 : 15;
-			console.log(`Recipient limit: ${e} addresses (${l?"Extended":"Standard"} limit)`)
-		} catch (e) {
-			console.log("Could not check extended recipients status. Assuming standard limit (15).")
-		}
-		try {
-			i = await r.taxFee(), console.log(`Current tax fee: ${t.formatEther(i)} ETH per recipient`)
-		} catch (e) {
-			console.error("Error fetching tax fee:", e), console.log("Using default tax fee of 0.000001 ETH"), i = t.parseEther("0.000001")
-		}
-		let c = (await question("Enter recipient addresses (comma separated): ")).split(",").map((e => e.trim())),
-			d = l ? 20 : 15;
-		if (c.length > d) throw Error(`Too many recipients. Your limit is ${d} addresses. You provided ${c.length} addresses.`);
-		for (let e of c) {
-			if (!t.isAddress(e)) throw Error(`Invalid address format: ${e}`);
-			try {
-				await r.blacklist(e) && console.log(`\n⚠️ WARNING: Recipient ${e} is blacklisted! Transactions will fail. ⚠️\n`)
-			} catch (e) {}
-		}
-		let u = (await question("Enter amounts (comma separated, matching the number of recipients): ")).split(",").map((e => e.trim()));
-		if (c.length !== u.length) throw Error("The number of recipients must match the number of amounts");
-		if (0 === c.length) throw Error("At least one recipient is required");
-		let f = i * BigInt(c.length);
-		if (a < f) throw Error(`Insufficient ETH balance for fees. You have ${t.formatEther(a)} ETH but need at least ${t.formatEther(f)} ETH for fees`);
-		let m = [],
-			g = !0,
-			h = BigInt(0);
-		for (; g;) {
-			let e = await question("\nEnter ERC20 token contract address: ");
-			if (!t.isAddress(e)) throw Error(`Invalid token address format: ${e}`);
-			try {
-				await r.whitelistERC20(e) || console.log(`\n⚠️ WARNING: Token ${e} is NOT whitelisted! Transaction will fail. ⚠️\n`)
-			} catch (e) {
-				console.log("Could not check if token is whitelisted.")
-			}
-			let l, d, p, w, k, E = new t.Contract(e, n, s);
-			try {
-				l = await E.name(), d = await E.symbol(), p = await E.decimals(), console.log(`\nToken: ${l} (${d})`), console.log(`Decimals: ${p}`)
-			} catch (e) {
-				console.log("Could not fetch token information. This might not be a valid ERC20 token."), l = "Unknown Token", d = "???", p = 18
-			}
-			try {
-				w = await E.balanceOf(s.address), console.log(`Your token balance: ${t.formatUnits(w,p)} ${d}`)
-			} catch (e) {
-				throw console.error("Error fetching token balance:", e), Error("Could not fetch token balance. Make sure this is a valid ERC20 token.")
-			}
-			for (let e = 0; e < u.length; e++)
-				if (!isValidAmount(u[e])) throw Error(`Invalid amount format at position ${e+1}: "${u[e]}". Please use a valid number format (e.g., 0.01, 1.5).`);
-			try {
-				k = u.map((e => t.parseUnits(e, p)))
-			} catch (e) {
-				if (e.message.includes("invalid FixedNumber string value")) throw Error("Invalid amount format. Please check your input and ensure all values are valid numbers.");
-				throw e
-			}
-			let $ = t.parseUnits("0", p);
-			for (let e of k) $ += e;
-			if (w < $) {
-				console.log(`\n⚠️ WARNING: Insufficient token balance. You have ${t.formatUnits(w,p)} ${d} but need ${t.formatUnits($,p)} ${d}`), console.log("Skipping this token...");
-				continue
-			}
-			let b = await E.allowance(s.address, o);
-			if (console.log(`Current allowance: ${t.formatUnits(b,p)} ${d}`), b < $) {
-				if (console.log(`\nNeed to approve ${t.formatUnits($,p)} ${d} to be spent by the contract`), "yes" !== (await question("Approve tokens? (yes/no): ")).toLowerCase()) {
-					console.log("Skipping this token...");
-					continue
-				}
-				try {
-					console.log("Approving tokens...");
-					let e = await E.approve(o, $);
-					console.log(`Approval transaction sent! Hash: ${e.hash}`), console.log("Waiting for confirmation...");
-					let t = await e.wait();
-					console.log(`Approval confirmed in block ${t.blockNumber}`)
-				} catch (e) {
-					console.error("Error approving tokens:", e), console.log("Skipping this token...");
-					continue
-				}
-			}
-			console.log("\nToken Transfer Summary:");
-			for (let e = 0; e < c.length; e++) console.log(`${e+1}. ${c[e]}: ${t.formatUnits(k[e],p)} ${d}`);
-			if (console.log(`Total tokens: ${t.formatUnits($,p)} ${d}`), console.log(`Tax Fee: ${t.formatEther(f)} ETH (${t.formatEther(i)} ETH per recipient)`), a < h + f) console.log(`\n⚠️ WARNING: Insufficient ETH balance for fees. You have ${t.formatEther(a)} ETH but need ${t.formatEther(h+f)} ETH for all fees`), console.log("Skipping this token...");
-			else if ("yes" === (await question("\nConfirm this token transfer? (yes/no): ")).toLowerCase()) {
-				console.log("Sending transaction...");
-				try {
-					let o = await r.multiTransferERC20(e, c, k, {
-						value: f,
-						gasLimit: 3e6
-					});
-					console.log(`Transaction sent! Hash: ${o.hash}`), console.log("Waiting for confirmation...");
-					let n = await o.wait();
-					console.log(`Transaction confirmed in block ${n.blockNumber}`), console.log(`Gas used: ${n.gasUsed.toString()}`), m.push({
-						token: d,
-						tokenName: l,
-						tokenAddress: e,
-						recipients: c.length,
-						totalAmount: t.formatUnits($, p),
-						txHash: o.hash,
-						blockNumber: n.blockNumber
-					}), h += f
-				} catch (e) {
-					if (console.error("Error sending transaction:", e), e.message && e.message.includes("execution reverted")) {
-						let o = e.message.split("reason=")[1]?.split('"')[1] || "Unknown reason";
-						console.error(`Transaction reverted: ${o}`)
-					}
-					console.log("Failed to send this token. Moving to next token...")
-				}
-				g = "yes" === (await question("\nDo you want to send another ERC20 token? (yes/no): ")).toLowerCase()
-			} else console.log("Skipping this token...")
-		}
-		m.length > 0 ? (console.log("\n=== Final Transaction Summary ==="), console.log(`Total tokens transferred: ${m.length}`), console.log(`Total ETH fees paid: ${t.formatEther(h)} ETH`), console.log("\nTransactions:"), m.forEach(((e, o) => {
-			console.log(`${o+1}. ${e.tokenName} (${e.token}): ${e.totalAmount} tokens to ${e.recipients} recipients`), console.log(`   TX Hash: ${e.txHash}`), console.log(`   Block: ${e.blockNumber}`)
-		})), console.log("\nAll transfers completed successfully!")) : console.log("\nNo tokens were transferred.")
-	} catch (e) {
-		if (console.error("Error:"), e.message && e.message.includes("invalid FixedNumber string value")) console.error("Invalid amount format. Please ensure all amounts are valid numbers (e.g., 0.01, 1.5)."), console.error("Common issues:"), console.error("- Using commas instead of periods for decimal points"), console.error("- Including currency symbols"), console.error("- Using spaces or other non-numeric characters");
-		else if (e.message && e.message.includes("execution reverted")) {
-			let o = e.message.split("reason=")[1]?.split('"')[1] || "Unknown reason";
-			console.error(`Transaction reverted: ${o}`)
-		} else console.error(e.message || e)
-	} finally {
-		rl.close()
-	}
+    console.log("TransferSWIFT - ERC20 multitransfer");
+    try {
+        const network = hre.network.name;
+        console.log(`Using network: ${network}`);
+        const {
+            ethers
+        } = hre;
+        let contractAddress;
+        switch (network) {
+            case "mainnet":
+                contractAddress = process.env.MAINNET_CONTRACT_ADDRESS;
+                break;
+            case "sepolia":
+                contractAddress = process.env.SEPOLIA_CONTRACT_ADDRESS;
+                break;
+            case "holesky":
+                contractAddress = process.env.HOLESKY_CONTRACT_ADDRESS;
+                break;
+            default:
+                throw new Error(`Unsupported network: ${network}. Please use mainnet, sepolia, or holesky.`);
+        }
+        if (!contractAddress) {
+            throw new Error(`Contract address not found for ${network} network. Check your environment variables.`);
+        }
+        const transferSwiftAbi = ["function multiTransferERC20(address token, address[] calldata recipients, uint256[] calldata amounts) external payable", "function taxFee() view returns (uint256)", "function blacklist(address) view returns (bool)", "function lastUsed(address) view returns (uint256)", "function rateLimitDuration() view returns (bool)", "function extendedRecipients(address) view returns (bool)", "function paused() view returns (bool)", "function isEmergencyStopped() view returns (bool)", "function whitelistERC20(address) view returns (bool)"];
+        const erc20Abi = ["function name() view returns (string)", "function symbol() view returns (string)", "function decimals() view returns (uint8)", "function balanceOf(address) view returns (uint256)", "function allowance(address owner, address spender) view returns (uint256)", "function approve(address spender, uint256 amount) returns (bool)"];
+        const [signer] = await ethers.getSigners();
+        const contract = new ethers.Contract(contractAddress, transferSwiftAbi, signer);
+        console.log(`Connected with address: ${signer.address}`);
+        const walletBalance = await ethers.provider.getBalance(signer.address);
+        console.log(`Wallet balance: ${ethers.formatEther(walletBalance)} ETH`);
+        console.log(`Contract address: ${contractAddress}`);
+        try {
+            const isPaused = await contract.paused();
+            if (isPaused) {
+                console.log("\n⚠️ WARNING: Contract is currently PAUSED! Transactions will fail. ⚠️\n");
+            }
+        } catch (error) {
+            console.log("Could not check if contract is paused.");
+        }
+        try {
+            const isEmergencyStopped = await contract.isEmergencyStopped();
+            if (isEmergencyStopped) {
+                console.log("\n⚠️ WARNING: Contract EMERGENCY STOP is active! Transactions will fail. ⚠️\n");
+            }
+        } catch (error) {
+            console.log("Could not check if emergency stop is active.");
+        }
+        try {
+            const isBlacklisted = await contract.blacklist(signer.address);
+            if (isBlacklisted) {
+                console.log("\n⚠️ WARNING: Your address is blacklisted! Transactions will fail. ⚠️\n");
+            }
+        } catch (error) {
+            console.log("Could not check blacklist status.");
+        }
+        try {
+            const lastUsedTime = await contract.lastUsed(signer.address);
+            const rateLimitDuration = await contract.rateLimitDuration();
+            const currentTimestamp = Math.floor(Date.now() / 1000);
+            const nextAvailableTime = Number(lastUsedTime) + Number(rateLimitDuration);
+            if (nextAvailableTime > currentTimestamp) {
+                const waitTimeSeconds = nextAvailableTime - currentTimestamp;
+                const waitTimeMinutes = Math.ceil(waitTimeSeconds / 60);
+                console.log(`\n⚠️ WARNING: Rate limit in effect. You need to wait approximately ${waitTimeMinutes} minute(s) before sending another transaction. ⚠️\n`);
+            }
+        } catch (error) {
+            console.log("Could not check rate limit status.");
+        }
+        let hasExtendedLimit = false;
+        try {
+            hasExtendedLimit = await contract.extendedRecipients(signer.address);
+            const recipientLimit = hasExtendedLimit ? 20 : 15;
+            console.log(`Recipient limit: ${recipientLimit} addresses (${hasExtendedLimit ? 'Extended' : 'Standard'} limit)`);
+        } catch (error) {
+            console.log("Could not check extended recipients status. Assuming standard limit (15).");
+        }
+        let taxFee;
+        try {
+            taxFee = await contract.taxFee();
+            console.log(`Current tax fee: ${ethers.formatEther(taxFee)} ETH per recipient`);
+        } catch (error) {
+            console.error("Error fetching tax fee:", error);
+            console.log("Using default tax fee of 0.000001 ETH");
+            taxFee = ethers.parseEther("0.000001");
+        }
+        const recipientInput = await question("Enter recipient addresses (comma separated): ");
+        const recipients = recipientInput.split(",").map(addr => addr.trim());
+        const recipientLimit = hasExtendedLimit ? 20 : 15;
+        if (recipients.length > recipientLimit) {
+            throw new Error(`Too many recipients. Your limit is ${recipientLimit} addresses. You provided ${recipients.length} addresses.`);
+        }
+        for (const recipient of recipients) {
+            if (!ethers.isAddress(recipient)) {
+                throw new Error(`Invalid address format: ${recipient}`);
+            }
+            try {
+                const isBlacklisted = await contract.blacklist(recipient);
+                if (isBlacklisted) {
+                    console.log(`\n⚠️ WARNING: Recipient ${recipient} is blacklisted! Transactions will fail. ⚠️\n`);
+                }
+            } catch (error) {}
+        }
+        const amountInput = await question("Enter amounts (comma separated, matching the number of recipients): ");
+        const amountStrings = amountInput.split(",").map(amt => amt.trim());
+        if (recipients.length !== amountStrings.length) {
+            throw new Error("The number of recipients must match the number of amounts");
+        }
+        if (recipients.length === 0) {
+            throw new Error("At least one recipient is required");
+        }
+        const totalEthFeePerToken = taxFee * BigInt(recipients.length);
+        if (walletBalance < totalEthFeePerToken) {
+            throw new Error(`Insufficient ETH balance for fees. You have ${ethers.formatEther(walletBalance)} ETH but need at least ${ethers.formatEther(totalEthFeePerToken)} ETH for fees`);
+        }
+        const transactions = [];
+        let continueWithAnotherToken = true;
+        let totalEthFeeUsed = BigInt(0);
+        while (continueWithAnotherToken) {
+            const tokenAddress = await question("\nEnter ERC20 token contract address: ");
+            if (!ethers.isAddress(tokenAddress)) {
+                throw new Error(`Invalid token address format: ${tokenAddress}`);
+            }
+            try {
+                const isWhitelisted = await contract.whitelistERC20(tokenAddress);
+                if (!isWhitelisted) {
+                    console.log(`\n⚠️ WARNING: Token ${tokenAddress} is NOT whitelisted! Transaction will fail. ⚠️\n`);
+                }
+            } catch (error) {
+                console.log("Could not check if token is whitelisted.");
+            }
+            const tokenContract = new ethers.Contract(tokenAddress, erc20Abi, signer);
+            let tokenName, tokenSymbol, tokenDecimals;
+            try {
+                tokenName = await tokenContract.name();
+                tokenSymbol = await tokenContract.symbol();
+                tokenDecimals = await tokenContract.decimals();
+                console.log(`\nToken: ${tokenName} (${tokenSymbol})`);
+                console.log(`Decimals: ${tokenDecimals}`);
+            } catch (error) {
+                console.log("Could not fetch token information. This might not be a valid ERC20 token.");
+                tokenName = "Unknown Token";
+                tokenSymbol = "???";
+                tokenDecimals = 18;
+            }
+            let tokenBalance;
+            try {
+                tokenBalance = await tokenContract.balanceOf(signer.address);
+                console.log(`Your token balance: ${ethers.formatUnits(tokenBalance, tokenDecimals)} ${tokenSymbol}`);
+            } catch (error) {
+                console.error("Error fetching token balance:", error);
+                throw new Error("Could not fetch token balance. Make sure this is a valid ERC20 token.");
+            }
+            for (let i = 0; i < amountStrings.length; i++) {
+                if (!isValidAmount(amountStrings[i])) {
+                    throw new Error(`Invalid amount format at position ${i+1}: "${amountStrings[i]}". Please use a valid number format (e.g., 0.01, 1.5).`);
+                }
+            }
+            let amounts;
+            try {
+                amounts = amountStrings.map(amt => ethers.parseUnits(amt, tokenDecimals));
+            } catch (error) {
+                if (error.message.includes("invalid FixedNumber string value")) {
+                    throw new Error(`Invalid amount format. Please check your input and ensure all values are valid numbers.`);
+                }
+                throw error;
+            }
+            let totalTokenAmount = ethers.parseUnits("0", tokenDecimals);
+            for (const amount of amounts) {
+                totalTokenAmount = totalTokenAmount + amount;
+            }
+            if (tokenBalance < totalTokenAmount) {
+                console.log(`\n⚠️ WARNING: Insufficient token balance. You have ${ethers.formatUnits(tokenBalance, tokenDecimals)} ${tokenSymbol} but need ${ethers.formatUnits(totalTokenAmount, tokenDecimals)} ${tokenSymbol}`);
+                console.log("Skipping this token...");
+                continue;
+            }
+            const allowance = await tokenContract.allowance(signer.address, contractAddress);
+            console.log(`Current allowance: ${ethers.formatUnits(allowance, tokenDecimals)} ${tokenSymbol}`);
+            if (allowance < totalTokenAmount) {
+                console.log(`\nNeed to approve ${ethers.formatUnits(totalTokenAmount, tokenDecimals)} ${tokenSymbol} to be spent by the contract`);
+                const approveConfirmation = await question("Approve tokens? (yes/no): ");
+                if (approveConfirmation.toLowerCase() !== "yes") {
+                    console.log("Skipping this token...");
+                    continue;
+                }
+                try {
+                    console.log("Approving tokens...");
+                    const approveTx = await tokenContract.approve(contractAddress, totalTokenAmount);
+                    console.log(`Approval transaction sent! Hash: ${approveTx.hash}`);
+                    console.log("Waiting for confirmation...");
+                    const approveReceipt = await approveTx.wait();
+                    console.log(`Approval confirmed in block ${approveReceipt.blockNumber}`);
+                } catch (error) {
+                    console.error("Error approving tokens:", error);
+                    console.log("Skipping this token...");
+                    continue;
+                }
+            }
+            console.log("\nToken Transfer Summary:");
+            for (let i = 0; i < recipients.length; i++) {
+                console.log(`${i + 1}. ${recipients[i]}: ${ethers.formatUnits(amounts[i], tokenDecimals)} ${tokenSymbol}`);
+            }
+            console.log(`Total tokens: ${ethers.formatUnits(totalTokenAmount, tokenDecimals)} ${tokenSymbol}`);
+            console.log(`Tax Fee: ${ethers.formatEther(totalEthFeePerToken)} ETH (${ethers.formatEther(taxFee)} ETH per recipient)`);
+            if (walletBalance < totalEthFeeUsed + totalEthFeePerToken) {
+                console.log(`\n⚠️ WARNING: Insufficient ETH balance for fees. You have ${ethers.formatEther(walletBalance)} ETH but need ${ethers.formatEther(totalEthFeeUsed + totalEthFeePerToken)} ETH for all fees`);
+                console.log("Skipping this token...");
+                continue;
+            }
+            const transferConfirmation = await question("\nConfirm this token transfer? (yes/no): ");
+            if (transferConfirmation.toLowerCase() !== "yes") {
+                console.log("Skipping this token...");
+                continue;
+            }
+            console.log("Sending transaction...");
+            try {
+                const tx = await contract.multiTransferERC20(tokenAddress, recipients, amounts, {
+                    value: totalEthFeePerToken,
+                    gasLimit: 3000000
+                });
+                console.log(`Transaction sent! Hash: ${tx.hash}`);
+                console.log("Waiting for confirmation...");
+                const receipt = await tx.wait();
+                console.log(`Transaction confirmed in block ${receipt.blockNumber}`);
+                console.log(`Gas used: ${receipt.gasUsed.toString()}`);
+                transactions.push({
+                    token: tokenSymbol,
+                    tokenName,
+                    tokenAddress,
+                    recipients: recipients.length,
+                    totalAmount: ethers.formatUnits(totalTokenAmount, tokenDecimals),
+                    txHash: tx.hash,
+                    blockNumber: receipt.blockNumber
+                });
+                totalEthFeeUsed = totalEthFeeUsed + totalEthFeePerToken;
+            } catch (error) {
+                console.error("Error sending transaction:", error);
+                if (error.message && error.message.includes("execution reverted")) {
+                    const revertReason = error.message.split("reason=")[1]?.split('"')[1] || "Unknown reason";
+                    console.error(`Transaction reverted: ${revertReason}`);
+                }
+                console.log("Failed to send this token. Moving to next token...");
+            }
+            const anotherToken = await question("\nDo you want to send another ERC20 token? (yes/no): ");
+            continueWithAnotherToken = anotherToken.toLowerCase() === "yes";
+        }
+        if (transactions.length > 0) {
+            console.log("\n=== Final Transaction Summary ===");
+            console.log(`Total tokens transferred: ${transactions.length}`);
+            console.log(`Total ETH fees paid: ${ethers.formatEther(totalEthFeeUsed)} ETH`);
+            console.log("\nTransactions:");
+            transactions.forEach((tx, index) => {
+                console.log(`${index + 1}. ${tx.tokenName} (${tx.token}): ${tx.totalAmount} tokens to ${tx.recipients} recipients`);
+                console.log(` TX Hash: ${tx.txHash}`);
+                console.log(` Block: ${tx.blockNumber}`);
+            });
+            console.log("\nAll transfers completed successfully!");
+        } else {
+            console.log("\nNo tokens were transferred.");
+        }
+    } catch (error) {
+        console.error("Error:");
+        if (error.message && error.message.includes("invalid FixedNumber string value")) {
+            console.error("Invalid amount format. Please ensure all amounts are valid numbers (e.g., 0.01, 1.5).");
+            console.error("Common issues:");
+            console.error("- Using commas instead of periods for decimal points");
+            console.error("- Including currency symbols");
+            console.error("- Using spaces or other non-numeric characters");
+        } else if (error.message && error.message.includes("execution reverted")) {
+            const revertReason = error.message.split("reason=")[1]?.split('"')[1] || "Unknown reason";
+            console.error(`Transaction reverted: ${revertReason}`);
+        } else {
+            console.error(error.message || error);
+        }
+    } finally {
+        rl.close();
+    }
 }
-main().then((() => process.exit(0))).catch((e => {
-	console.error("Fatal error:", e), process.exit(1)
-}));
+main().then(() => process.exit(0)).catch((error) => {
+    console.error("Fatal error:", error);
+    process.exit(1);
+});
