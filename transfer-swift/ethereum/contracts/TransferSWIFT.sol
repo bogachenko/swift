@@ -401,14 +401,13 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(recipients.length <= currentRecipients, "Too many recipients");
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < recipients.length; ) {
-            require(
-                recipients[i] != address(0) && !blacklist[recipients[i]],
-                "Invalid recipient"
-            );
-            require(amounts[i] > 0, "Amount must be greater than 0");
-            uint256 oldTotal = totalAmount;
-            totalAmount += amounts[i];
-            require(totalAmount >= oldTotal, "Overflow detected");
+            address recipient = recipients[i];
+            uint256 amount = amounts[i];
+            require(recipient != address(0), "Zero address recipient");
+            require(!blacklist[recipient], "Blacklisted recipient");
+            require(amount > 0, "Zero amount transfer");
+            totalAmount += amount;
+            require(totalAmount >= amount, "Arithmetic overflow");
             unchecked {
                 ++i;
             }
@@ -507,7 +506,15 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             uint256 id = tokenIds[i];
             require(to != address(0) && !blacklist[to], "Invalid recipient");
             if (isContract(to)) {
-               require(IERC721Receiver(to).onERC721Received(msg.sender, msg.sender, id, "")== IERC721Receiver.onERC721Received.selector,"ERC721: Receiver rejected");
+                require(
+                    IERC721Receiver(to).onERC721Received(
+                        msg.sender,
+                        msg.sender,
+                        id,
+                        ""
+                    ) == IERC721Receiver.onERC721Received.selector,
+                    "ERC721: Receiver rejected"
+                );
             }
             try erc721.safeTransferFrom(msg.sender, to, id, "") {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
@@ -552,7 +559,10 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     {
         require(token != address(0), "Invalid token address");
         require(whitelistERC1155[token], "Token not whitelisted");
-        require(recipients.length == ids.length && ids.length == amounts.length,"Mismatched arrays");
+        require(
+            recipients.length == ids.length && ids.length == amounts.length,
+            "Mismatched arrays"
+        );
         require(recipients.length > 0, "Empty recipient array");
         uint256 allowedRecipients = extendedRecipients[msg.sender]
             ? maxRecipients
@@ -573,7 +583,14 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             );
             require(amt > 0, "Amount must be > 0");
             if (isContract(to)) {
-                try IERC1155Receiver(to).onERC1155Received(msg.sender, msg.sender, id, amt, "")
+                try
+                    IERC1155Receiver(to).onERC1155Received(
+                        msg.sender,
+                        msg.sender,
+                        id,
+                        amt,
+                        ""
+                    )
                 returns (bytes4 response) {
                     require(
                         response == IERC1155Receiver.onERC1155Received.selector,
@@ -586,20 +603,20 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             try erc1155.safeTransferFrom(msg.sender, to, id, amt, "") {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
-                emit TokenTransferFailed(
-                    token,
-                    msg.sender,
-                    to,
-                    id,
-                    reason
-                );
+                emit TokenTransferFailed(token, msg.sender, to, id, reason);
                 revert(
                     string(
                         abi.encodePacked("ERC1155 transfer failed: ", reason)
                     )
                 );
             } catch (bytes memory) {
-                emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
+                emit TokenTransferFailed(
+                    token,
+                    msg.sender,
+                    to,
+                    id,
+                    "unknown error"
+                );
                 revert("ERC1155 transfer failed with unknown error");
                 unchecked {
                     ++i;
@@ -618,11 +635,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function grantRole(
         bytes32 role,
         address account
-    )
-        public
-        override(AccessControl, IAccessControl)
-        onlyAdmin
-    {
+    ) public override(AccessControl, IAccessControl) onlyAdmin {
         require(account != address(0), "Zero address");
         require(!isContract(account), "Address must not be a contract");
         require(!hasRole(role, account), "Account already has this role");
@@ -641,11 +654,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function revokeRole(
         bytes32 role,
         address account
-    )
-        public
-        override(AccessControl, IAccessControl)
-        onlyAdmin
-    {
+    ) public override(AccessControl, IAccessControl) onlyAdmin {
         if (role == adminRole) {
             require(
                 getRoleMemberCount(adminRole) > 1,
@@ -892,6 +901,12 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         address tokenAddress,
         uint256 tokenId
     ) external onlyAdmin noActiveWithdrawalRequest {
+        require(
+            withdrawalRequest.requestTime == 0 ||
+                withdrawalRequest.isCancelled ||
+                block.timestamp > withdrawalRequest.requestTime + 7 days,
+            "Active withdrawal request exists. Cancel it first or wait for expiration."
+        );
         uint256 availableEthBalance = address(this).balance -
             accumulatedRoyalties;
 
