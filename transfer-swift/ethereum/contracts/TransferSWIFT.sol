@@ -583,7 +583,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
                     revert("ERC1155: Transfer to non-receiver contract");
                 }
             }
-            try erc1155.safeTransferFrom(msg.sender, to, id, amounts, "") {
+            try erc1155.safeTransferFrom(msg.sender, to, id, amt, "") {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
                 emit TokenTransferFailed(
@@ -599,14 +599,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
                     )
                 );
             } catch (bytes memory) {
-                emit TokenTransferFailed(
-                    token,
-                    msg.sender,
-                    to,
-                    id,
-                    amounts,
-                    "unknown error"
-                );
+                emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC1155 transfer failed with unknown error");
                 unchecked {
                     ++i;
