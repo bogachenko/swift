@@ -1,21 +1,25 @@
-require("@nomicfoundation/hardhat-toolbox"), require("@openzeppelin/hardhat-upgrades"), require("dotenv").config(), module.exports = {
-	solidity: {
-		version: "0.8.20",
-		settings: {
-			optimizer: {
-				enabled: !0,
-				runs: 200
-			},
-			viaIR: !0
-		}
-	},
+require("dotenv").config(), require("@nomicfoundation/hardhat-toolbox"), module.exports = {
+	solidity: "0.8.24",
 	networks: {
 		holesky: {
-			url: process.env.HOLESKY_RPC_URL,
+			url: process.env.HOLESKY_RPC_URL || "",
+			accounts: [process.env.PRIVATE_KEY]
+		},
+		sepolia: {
+			url: process.env.SEPOLIA_RPC_URL || "",
+			accounts: [process.env.PRIVATE_KEY]
+		},
+		mainnet: {
+			url: process.env.MAINET_RPC_URL || "",
 			accounts: [process.env.PRIVATE_KEY]
 		}
 	},
+	sourcify: {
+		enabled: !0
+	},
 	etherscan: {
-		apiKey: process.env.ETHERSCAN_API_KEY
+		apiKey: {
+			holesky: process.env.ETHERSCAN_API_KEY
+		}
 	}
 };

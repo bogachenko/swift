@@ -1,10 +1,13 @@
 const hre = require("hardhat");
 async function main() {
-	var [e] = await hre.ethers.getSigners();
-	console.log("Deploying with:", e.address);
-	const t = await hre.ethers.getContractFactory("TestCOIN721Batch"),
-		a = await t.deploy(e.address);
-	await a.waitForDeployment(), console.log("Contract deployed to:", await a.getAddress())
+	let e = hre.network.name,
+		[t] = await hre.ethers.getSigners(),
+		a = process.env.MY_WALLET,
+		r = await hre.ethers.getContractFactory("TestNFT"),
+		o = await r.deploy(a);
+	await o.waitForDeployment();
+	let n = await o.getAddress();
+	console.log(`Deployed TestNFT to ${n} on network ${e}`)
 }
 main().catch(e => {
 	console.error(e), process.exitCode = 1
