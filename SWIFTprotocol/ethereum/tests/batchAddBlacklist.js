@@ -26,7 +26,7 @@ async function main() {
   if (!ETH_ADDRESS_REGEX.test(contractAddress)) {
       throw new Error("Invalid contract address in .env");
   }
-  const contract = await ethers.getContractAt("TransferSWIFT", contractAddress);
+  const contract = await ethers.getContractAt("SWIFTProtocol", contractAddress);
   readline.question("Enter addresses to blacklist (comma-separated): ", async (input) => {
       const addresses = input.split(",").map((addr) => addr.trim());
       const invalidAddresses = addresses.filter((addr) => !ETH_ADDRESS_REGEX.test(addr));

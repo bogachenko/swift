@@ -16,7 +16,7 @@ function isValidAmount(amount) {
     return true;
 }
 async function main() {
-    console.log("TransferSWIFT - ERC20 multitransfer");
+    console.log("SWIFT Protocol - ERC20 multitransfer");
     try {
         const network = hre.network.name;
         console.log(`Using network: ${network}`);
@@ -40,10 +40,10 @@ async function main() {
         if (!contractAddress) {
             throw new Error(`Contract address not found for ${network} network. Check your environment variables.`);
         }
-        const transferSwiftAbi = ["function multiTransferERC20(address token, address[] calldata recipients, uint256[] calldata amounts) external payable", "function taxFee() view returns (uint256)", "function blacklist(address) view returns (bool)", "function lastUsed(address) view returns (uint256)", "function rateLimitDuration() view returns (bool)", "function extendedRecipients(address) view returns (bool)", "function paused() view returns (bool)", "function isEmergencyStopped() view returns (bool)", "function whitelistERC20(address) view returns (bool)"];
+        const SWIFTProtocolAbi = ["function multiTransferERC20(address token, address[] calldata recipients, uint256[] calldata amounts) external payable", "function taxFee() view returns (uint256)", "function blacklist(address) view returns (bool)", "function lastUsed(address) view returns (uint256)", "function rateLimitDuration() view returns (bool)", "function extendedRecipients(address) view returns (bool)", "function paused() view returns (bool)", "function isEmergencyStopped() view returns (bool)", "function whitelistERC20(address) view returns (bool)"];
         const erc20Abi = ["function name() view returns (string)", "function symbol() view returns (string)", "function decimals() view returns (uint8)", "function balanceOf(address) view returns (uint256)", "function allowance(address owner, address spender) view returns (uint256)", "function approve(address spender, uint256 amount) returns (bool)"];
         const [signer] = await ethers.getSigners();
-        const contract = new ethers.Contract(contractAddress, transferSwiftAbi, signer);
+        const contract = new ethers.Contract(contractAddress, SWIFTProtocolAbi, signer);
         console.log(`Connected with address: ${signer.address}`);
         const walletBalance = await ethers.provider.getBalance(signer.address);
         console.log(`Wallet balance: ${ethers.formatEther(walletBalance)} ETH`);

@@ -16,7 +16,7 @@ function isValidEthAmount(amount) {
     return true;
 }
 async function main() {
-    console.log("TransferSWIFT - ETH multitransfer");
+    console.log("SWIFT Protocol - ETH multitransfer");
     try {
         const network = hre.network.name;
         console.log(`Using network: ${network}`);

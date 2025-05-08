@@ -14,13 +14,13 @@ import "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
 
-/// @title TransferSWIFT
+/// @title SWIFT Protocol
 /// @author Bogachenko Vyacheslav
-/// @notice TransferSWIFT is a universal contract for batch transfers of native coins and tokens.
+/// @notice SWIFT Protocol is a universal contract for batch transfers of native coins and tokens.
 /// @custom:licence License: MIT
 /// @custom:version Version 0.0.0.8 (unstable)
 
-contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
+contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /*********************************************************************/
     /// @title Contract configuration and state parameters
     /// @notice This section contains contract state variables and settings
@@ -66,7 +66,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     address public pendingOwner;
     /// @notice Protocol display name
     /// @dev Used for interface identification
-    string public name = "TransferSWIFT";
+    string public name = "SWIFT Protocol";
     /// @notice Protocol symbol
     /// @dev Used for interface identification
     string public symbol = "SWIFT";
@@ -541,7 +541,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         IERC721 erc721 = IERC721(token);
         uint256 totalFee = taxFee * recipients.length;
         require(msg.value == totalFee, "Incorrect tax fee");
-        accumulatedRoyalties += taxFee;
+        accumulatedRoyalties += totalFee;
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 id = tokenIds[i];

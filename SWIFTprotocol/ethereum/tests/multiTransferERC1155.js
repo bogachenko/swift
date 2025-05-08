@@ -12,8 +12,18 @@ function isValidTokenId(tokenId) {
     }
     return true;
 }
+
+function isValidAmount(amount) {
+    if (!/^\d+$/.test(amount)) {
+        return false;
+    }
+    if (parseInt(amount) <= 0) {
+        return false;
+    }
+    return true;
+}
 async function main() {
-    console.log("TransferSWIFT - ERC721 multitransfer");
+    console.log("SWIFT Protocol - ERC1155 multitransfer");
     try {
         const network = hre.network.name;
         console.log(`Using network: ${network}`);
@@ -37,10 +47,10 @@ async function main() {
         if (!contractAddress) {
             throw new Error(`Contract address not found for ${network} network. Check your environment variables.`);
         }
-        const transferSwiftAbi = ["function multiTransferERC721(address token, address[] calldata recipients, uint256[] calldata tokenIds) external payable", "function taxFee() view returns (uint256)", "function blacklist(address) view returns (bool)", "function lastUsed(address) view returns (uint256)", "function rateLimitDuration() view returns (uint256)", "function extendedRecipients(address) view returns (bool)", "function paused() view returns (bool)", "function isEmergencyStopped() view returns (bool)", "function whitelistERC721(address) view returns (bool)"];
-        const erc721Abi = ["function name() view returns (string)", "function symbol() view returns (string)", "function ownerOf(uint256 tokenId) view returns (address)", "function tokenURI(uint256 tokenId) view returns (string)", "function isApprovedForAll(address owner, address operator) view returns (bool)", "function setApprovalForAll(address operator, bool approved) returns (bool)", "function getApproved(uint256 tokenId) view returns (address)", "function approve(address to, uint256 tokenId) returns (bool)"];
+        const SWIFTProtocolAbi = ["function multiTransferERC1155(address token, address[] calldata recipients, uint256[] calldata ids, uint256[] calldata amounts) external payable", "function taxFee() view returns (uint256)", "function blacklist(address) view returns (bool)", "function lastUsed(address) view returns (uint256)", "function rateLimitDuration() view returns (uint256)", "function extendedRecipients(address) view returns (bool)", "function paused() view returns (bool)", "function isEmergencyStopped() view returns (bool)", "function whitelistERC1155(address) view returns (bool)"];
+        const erc1155Abi = ["function uri(uint256 id) view returns (string)", "function balanceOf(address account, uint256 id) view returns (uint256)", "function balanceOfBatch(address[] calldata accounts, uint256[] calldata ids) view returns (uint256[])", "function isApprovedForAll(address account, address operator) view returns (bool)", "function setApprovalForAll(address operator, bool approved) returns (bool)"];
         const [signer] = await ethers.getSigners();
-        const contract = new ethers.Contract(contractAddress, transferSwiftAbi, signer);
+        const contract = new ethers.Contract(contractAddress, SWIFTProtocolAbi, signer);
         console.log(`Connected with address: ${signer.address}`);
         const walletBalance = await ethers.provider.getBalance(signer.address);
         console.log(`Wallet balance: ${ethers.formatEther(walletBalance)} ETH`);
@@ -121,12 +131,22 @@ async function main() {
         if (recipients.length !== tokenIdStrings.length) {
             throw new Error("The number of recipients must match the number of token IDs");
         }
-        if (recipients.length === 0) {
-            throw new Error("At least one recipient is required");
-        }
         for (let i = 0; i < tokenIdStrings.length; i++) {
             if (!isValidTokenId(tokenIdStrings[i])) {
                 throw new Error(`Invalid token ID format at position ${i+1}: "${tokenIdStrings[i]}". Please use a valid integer.`);
+            }
+        }
+        const amountInput = await question("Enter amounts (comma separated, matching the number of recipients): ");
+        const amountStrings = amountInput.split(",").map(amt => amt.trim());
+        if (recipients.length !== amountStrings.length) {
+            throw new Error("The number of recipients must match the number of amounts");
+        }
+        if (recipients.length === 0) {
+            throw new Error("At least one recipient is required");
+        }
+        for (let i = 0; i < amountStrings.length; i++) {
+            if (!isValidAmount(amountStrings[i])) {
+                throw new Error(`Invalid amount format at position ${i+1}: "${amountStrings[i]}". Please use a positive integer.`);
             }
         }
         const totalEthFeePerContract = taxFee * BigInt(recipients.length);
@@ -137,67 +157,63 @@ async function main() {
         let continueWithAnotherContract = true;
         let totalEthFeeUsed = BigInt(0);
         while (continueWithAnotherContract) {
-            const nftContractAddress = await question("\nEnter ERC721 token contract address: ");
-            if (!ethers.isAddress(nftContractAddress)) {
-                throw new Error(`Invalid contract address format: ${nftContractAddress}`);
+            const tokenContractAddress = await question("\nEnter ERC1155 token contract address: ");
+            if (!ethers.isAddress(tokenContractAddress)) {
+                throw new Error(`Invalid contract address format: ${tokenContractAddress}`);
             }
             try {
-                const isWhitelisted = await contract.whitelistERC721(nftContractAddress);
+                const isWhitelisted = await contract.whitelistERC1155(tokenContractAddress);
                 if (!isWhitelisted) {
-                    console.log(`\n⚠️ WARNING: NFT Contract ${nftContractAddress} is NOT whitelisted! Transaction will fail. ⚠️\n`);
+                    console.log(`\n⚠️ WARNING: ERC1155 Contract ${tokenContractAddress} is NOT whitelisted! Transaction will fail. ⚠️\n`);
                 }
             } catch (error) {
-                console.log("Could not check if NFT contract is whitelisted.");
+                console.log("Could not check if ERC1155 contract is whitelisted.");
             }
-            const nftContract = new ethers.Contract(nftContractAddress, erc721Abi, signer);
-            let collectionName, collectionSymbol;
-            try {
-                collectionName = await nftContract.name();
-                collectionSymbol = await nftContract.symbol();
-                console.log(`\nNFT Collection: ${collectionName} (${collectionSymbol})`);
-            } catch (error) {
-                console.log("Could not fetch NFT collection information. This might not be a valid ERC721 contract.");
-                collectionName = "Unknown Collection";
-                collectionSymbol = "???";
-            }
+            const tokenContract = new ethers.Contract(tokenContractAddress, erc1155Abi, signer);
             const tokenIds = tokenIdStrings.map(id => BigInt(id));
-            const ownedTokens = [];
-            const notOwnedTokens = [];
+            const amounts = amountStrings.map(amt => BigInt(amt));
+            const validTransfers = [];
+            const invalidTransfers = [];
             for (let i = 0; i < tokenIds.length; i++) {
                 try {
-                    const owner = await nftContract.ownerOf(tokenIds[i]);
-                    if (owner.toLowerCase() === signer.address.toLowerCase()) {
-                        ownedTokens.push({
+                    const balance = await tokenContract.balanceOf(signer.address, tokenIds[i]);
+                    if (balance >= amounts[i]) {
+                        validTransfers.push({
                             tokenId: tokenIds[i],
+                            amount: amounts[i],
                             recipient: recipients[i],
                             index: i
                         });
                     } else {
-                        notOwnedTokens.push({
+                        invalidTransfers.push({
                             tokenId: tokenIds[i],
-                            owner,
+                            amount: amounts[i],
+                            balance,
+                            recipient: recipients[i],
                             index: i
                         });
                     }
                 } catch (error) {
-                    console.log(`Could not check ownership of token ID ${tokenIds[i]}. It might not exist.`);
-                    notOwnedTokens.push({
+                    console.log(`Could not check balance of token ID ${tokenIds[i]}.`);
+                    invalidTransfers.push({
                         tokenId: tokenIds[i],
-                        owner: "Unknown or non-existent",
+                        amount: amounts[i],
+                        balance: "Unknown",
+                        recipient: recipients[i],
                         index: i
                     });
                 }
             }
-            if (notOwnedTokens.length > 0) {
-                console.log("\n⚠️ WARNING: You don't own the following tokens:");
-                for (const token of notOwnedTokens) {
-                    console.log(`Token ID ${token.tokenId}: Owned by ${token.owner}`);
+            if (invalidTransfers.length > 0) {
+                console.log("\n⚠️ WARNING: You don't have enough balance for the following transfers:");
+                for (const transfer of invalidTransfers) {
+                    console.log(`Token ID ${transfer.tokenId}: Requested ${transfer.amount}, Balance ${transfer.balance}`);
                 }
-                if (ownedTokens.length === 0) {
-                    console.log("You don't own any of the specified tokens. Skipping this contract...");
+                if (validTransfers.length === 0) {
+                    console.log("You don't have enough balance for any of the specified transfers. Skipping this contract...");
                     continue;
                 }
-                console.log(`\nOnly ${ownedTokens.length} out of ${tokenIds.length} tokens will be transferred.`);
+                console.log(`\nOnly ${validTransfers.length} out of ${tokenIds.length} transfers can be completed.`);
                 const continuePartial = await question("Continue with partial transfer? (yes/no): ");
                 if (continuePartial.toLowerCase() !== "yes") {
                     console.log("Skipping this contract...");
@@ -206,85 +222,58 @@ async function main() {
             }
             let isApprovedForAll = false;
             try {
-                isApprovedForAll = await nftContract.isApprovedForAll(signer.address, contractAddress);
+                isApprovedForAll = await tokenContract.isApprovedForAll(signer.address, contractAddress);
             } catch (error) {
                 console.log("Could not check approval status.");
             }
-            const needsApproval = [];
             if (!isApprovedForAll) {
-                for (const token of ownedTokens) {
-                    try {
-                        const approved = await nftContract.getApproved(token.tokenId);
-                        if (approved.toLowerCase() !== contractAddress.toLowerCase()) {
-                            needsApproval.push(token);
-                        }
-                    } catch (error) {
-                        console.log(`Could not check approval for token ID ${token.tokenId}.`);
-                        needsApproval.push(token);
-                    }
+                console.log(`\nNeed to approve the contract to transfer your ERC1155 tokens.`);
+                const approveConfirmation = await question("Approve tokens? (yes/no): ");
+                if (approveConfirmation.toLowerCase() !== "yes") {
+                    console.log("Skipping this contract...");
+                    continue;
+                }
+                try {
+                    console.log("Approving tokens...");
+                    const approveTx = await tokenContract.setApprovalForAll(contractAddress, true);
+                    console.log(`Approval transaction sent! Hash: ${approveTx.hash}`);
+                    console.log("Waiting for confirmation...");
+                    const approveReceipt = await approveTx.wait();
+                    console.log(`Approval confirmed in block ${approveReceipt.blockNumber}`);
+                    isApprovedForAll = true;
+                } catch (error) {
+                    console.error("Error approving tokens:", error);
+                    console.log("Skipping this contract...");
+                    continue;
                 }
             }
-            if (!isApprovedForAll && needsApproval.length > 0) {
-                console.log(`\nNeed to approve ${needsApproval.length} tokens for transfer.`);
-                const approveAll = await question("Approve all tokens at once? (yes/no): ");
-                if (approveAll.toLowerCase() === "yes") {
-                    try {
-                        console.log("Approving all tokens...");
-                        const approveTx = await nftContract.setApprovalForAll(contractAddress, true);
-                        console.log(`Approval transaction sent! Hash: ${approveTx.hash}`);
-                        console.log("Waiting for confirmation...");
-                        const approveReceipt = await approveTx.wait();
-                        console.log(`Approval confirmed in block ${approveReceipt.blockNumber}`);
-                        isApprovedForAll = true;
-                    } catch (error) {
-                        console.error("Error approving all tokens:", error);
-                        console.log("Will try individual approvals...");
-                    }
-                }
-                if (!isApprovedForAll) {
-                    for (const token of needsApproval) {
-                        try {
-                            console.log(`Approving token ID ${token.tokenId}...`);
-                            const approveTx = await nftContract.approve(contractAddress, token.tokenId);
-                            console.log(`Approval transaction sent! Hash: ${approveTx.hash}`);
-                            const approveReceipt = await approveTx.wait();
-                            console.log(`Approval confirmed in block ${approveReceipt.blockNumber}`);
-                        } catch (error) {
-                            console.error(`Error approving token ID ${token.tokenId}:`, error);
-                            const index = ownedTokens.findIndex(t => t.tokenId === token.tokenId);
-                            if (index !== -1) {
-                                ownedTokens.splice(index, 1);
-                            }
-                        }
-                    }
-                }
-            }
-            if (ownedTokens.length === 0) {
+            if (validTransfers.length === 0) {
                 console.log("No tokens left to transfer. Skipping this contract...");
                 continue;
             }
-            const transferRecipients = ownedTokens.map(token => token.recipient);
-            const transferTokenIds = ownedTokens.map(token => token.tokenId);
+            const transferRecipients = validTransfers.map(transfer => transfer.recipient);
+            const transferTokenIds = validTransfers.map(transfer => transfer.tokenId);
+            const transferAmounts = validTransfers.map(transfer => transfer.amount);
             const transferFee = taxFee * BigInt(transferRecipients.length);
             if (walletBalance < totalEthFeeUsed + transferFee) {
                 console.log(`\n⚠️ WARNING: Insufficient ETH balance for fees. You have ${ethers.formatEther(walletBalance)} ETH but need ${ethers.formatEther(totalEthFeeUsed + transferFee)} ETH for all fees`);
                 console.log("Skipping this contract...");
                 continue;
             }
-            console.log("\nNFT Transfer Summary:");
+            console.log("\nERC1155 Transfer Summary:");
             for (let i = 0; i < transferRecipients.length; i++) {
-                console.log(`${i + 1}. Token ID ${transferTokenIds[i]} to ${transferRecipients[i]}`);
+                console.log(`${i + 1}. Token ID ${transferTokenIds[i]}, Amount: ${transferAmounts[i]} to ${transferRecipients[i]}`);
             }
-            console.log(`Total NFTs: ${transferTokenIds.length}`);
+            console.log(`Total transfers: ${transferTokenIds.length}`);
             console.log(`Tax Fee: ${ethers.formatEther(transferFee)} ETH (${ethers.formatEther(taxFee)} ETH per recipient)`);
-            const transferConfirmation = await question("\nConfirm this NFT transfer? (yes/no): ");
+            const transferConfirmation = await question("\nConfirm this ERC1155 transfer? (yes/no): ");
             if (transferConfirmation.toLowerCase() !== "yes") {
                 console.log("Skipping this contract...");
                 continue;
             }
             console.log("Sending transaction...");
             try {
-                const tx = await contract.multiTransferERC721(nftContractAddress, transferRecipients, transferTokenIds, {
+                const tx = await contract.multiTransferERC1155(tokenContractAddress, transferRecipients, transferTokenIds, transferAmounts, {
                     value: transferFee,
                     gasLimit: 3000000
                 });
@@ -294,10 +283,9 @@ async function main() {
                 console.log(`Transaction confirmed in block ${receipt.blockNumber}`);
                 console.log(`Gas used: ${receipt.gasUsed.toString()}`);
                 transactions.push({
-                    collection: collectionName,
-                    symbol: collectionSymbol,
-                    contractAddress: nftContractAddress,
+                    contractAddress: tokenContractAddress,
                     tokenIds: transferTokenIds.map(id => id.toString()),
+                    amounts: transferAmounts.map(amt => amt.toString()),
                     recipients: transferRecipients.length,
                     txHash: tx.hash,
                     blockNumber: receipt.blockNumber
@@ -309,25 +297,38 @@ async function main() {
                     const revertReason = error.message.split("reason=")[1]?.split('"')[1] || "Unknown reason";
                     console.error(`Transaction reverted: ${revertReason}`);
                 }
-                console.log("Failed to send NFTs. Moving to next contract...");
+                console.log("Failed to send tokens. Moving to next contract...");
             }
-            const anotherContract = await question("\nDo you want to send NFTs from another ERC721 contract? (yes/no): ");
+            const anotherContract = await question("\nDo you want to send tokens from another ERC1155 contract? (yes/no): ");
             continueWithAnotherContract = anotherContract.toLowerCase() === "yes";
         }
         if (transactions.length > 0) {
             console.log("\n=== Final Transaction Summary ===");
-            console.log(`Total NFT collections transferred: ${transactions.length}`);
+            console.log(`Total ERC1155 contracts used: ${transactions.length}`);
             console.log(`Total ETH fees paid: ${ethers.formatEther(totalEthFeeUsed)} ETH`);
             console.log("\nTransactions:");
             transactions.forEach((tx, index) => {
-                console.log(`${index + 1}. ${tx.collection} (${tx.symbol}): ${tx.tokenIds.length} NFTs to ${tx.recipients} recipients`);
-                console.log(` Token IDs: ${tx.tokenIds.join(', ')}`);
+                console.log(`${index + 1}. Contract: ${tx.contractAddress}`);
+                console.log(` Transfers: ${tx.recipients} recipients`);
+                const tokenTransfers = {};
+                for (let i = 0; i < tx.tokenIds.length; i++) {
+                    const tokenId = tx.tokenIds[i];
+                    const amount = tx.amounts[i];
+                    if (!tokenTransfers[tokenId]) {
+                        tokenTransfers[tokenId] = 0n;
+                    }
+                    tokenTransfers[tokenId] += BigInt(amount);
+                }
+                console.log(` Token IDs and Amounts:`);
+                for (const [tokenId, amount] of Object.entries(tokenTransfers)) {
+                    console.log(` - Token ID ${tokenId}: ${amount} units`);
+                }
                 console.log(` TX Hash: ${tx.txHash}`);
                 console.log(` Block: ${tx.blockNumber}`);
             });
             console.log("\nAll transfers completed successfully!");
         } else {
-            console.log("\nNo NFTs were transferred.");
+            console.log("\nNo tokens were transferred.");
         }
     } catch (error) {
         console.error("Error:");
