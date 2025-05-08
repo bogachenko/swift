@@ -103,6 +103,12 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Emergency activation reason
     /// @dev Saving a hashed message describing the reason
     bytes32 public emergencyReason;
+    /// @notice MEV protection
+    /// @dev When true, transactions will use a commit-reveal pattern
+    bool public mevProtectionEnabled = false;
+    /// @notice Time window for executing a committed transaction
+    /// @dev Default: 10 minutes (600 seconds)
+    uint256 public commitmentWindow = 600;
 
     /*********************************************************************/
     /// @title Contract access control and restrictions
@@ -132,6 +138,9 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Token contract addresses permitted for transactions
     /// @return isWhitelisted - True if token is approved
     mapping(address => bool) public whitelistERC1155;
+    /// @notice Mapping to store transaction commitments
+    /// @dev Maps commitment hash to its timestamp
+    mapping(bytes32 => uint256) public pendingCommitments;
 
     /*********************************************************************/
     /// @title Contains data structures for handling contract requests
@@ -163,18 +172,12 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Logs both previous and new contract owners
     /// @param previousOwner - Address of the outgoing owner
     /// @param newOwner - Address of the new owner
-    event OwnershipTransferred(
-        address indexed previousOwner,
-        address indexed newOwner
-    );
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     /// @notice Emitted when ownership transfer is initiated
     /// @dev Marks the beginning of a two-step ownership transfer process
     /// @param currentOwner - Address of the current owner
     /// @param pendingOwner - Address of the pending new owner
-    event OwnershipTransferInitiated(
-        address indexed currentOwner,
-        address indexed pendingOwner
-    );
+    event OwnershipTransferInitiated(address indexed currentOwner, address indexed pendingOwner);
     /// @notice Emitted when ownership is permanently renounced
     /// @dev Indicates contract has become ownerless
     /// @param previousOwner - Address of the last owner
@@ -249,24 +252,26 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param to - Recipient address
     /// @param tokenId - Token ID (for ERC721/ERC1155)
     /// @param reason - Failure reason string or error code
-    event TokenTransferFailed(
-        address token,
-        address from,
-        address to,
-        uint256 tokenId,
-        string reason
-    );
+    event TokenTransferFailed(address token, address from, address to, uint256 tokenId, string reason);
     /// @notice Emitted when a token transfer succeeds
     /// @param token - Address of token contract
     /// @param from - Initiating address
     /// @param to - Recipient address
     /// @param tokenId - Transferred token ID
-    event TokenTransferSucceeded(
-        address token,
-        address from,
-        address to,
-        uint256 tokenId
-    );
+    event TokenTransferSucceeded(address token, address from, address to, uint256 tokenId);
+    /// @notice Emitted when a transaction commitment is created
+    /// @param committer - Address that created the commitment
+    /// @param commitmentHash - Hash of the committed transaction
+    /// @param timestamp - Block timestamp when commitment was created
+    event TransactionCommitted(address indexed committer, bytes32 indexed commitmentHash, uint256 timestamp);
+    /// @notice Emitted when MEV protection setting is changed
+    /// @param enabled - New state of MEV protection
+    /// @param changedBy - Address that changed the setting
+    event MevProtectionSettingChanged(bool enabled, address indexed changedBy);
+    /// @notice Emitted when commitment window duration is updated
+    /// @param newWindow - New commitment window duration in seconds
+    /// @param changedBy - Address that changed the setting
+    event CommitmentWindowUpdated(uint256 newWindow, address indexed changedBy);
 
     /*********************************************************************/
     /// @title Access Control Modifiers
@@ -384,7 +389,9 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param amounts - Array of transfer amounts
     function multiTransferETH(
         address[] calldata recipients,
-        uint256[] calldata amounts
+        uint256[] calldata amounts,
+        bool useMevProtection,
+        bytes32 salt
     )
         external
         payable
@@ -399,6 +406,17 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             ? maxRecipients
             : defaultRecipients;
         require(recipients.length <= currentRecipients, "Too many recipients");
+            if (useMevProtection) {
+        bytes32 commitmentHash = getEthCommitmentHash(
+            msg.sender,
+            recipients,
+            amounts,
+            salt
+        );
+        require(validateCommitment(commitmentHash, msg.sender), 
+                "Invalid or expired commitment");
+        clearCommitment(commitmentHash);
+        }
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             address recipient = recipients[i];
@@ -414,9 +432,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         }
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
         for (uint256 i = 0; i < recipients.length; ) {
-            (bool success, ) = payable(recipients[i]).call{value: amounts[i]}(
-                ""
-            );
+            (bool success, ) = payable(recipients[i]).call{value: amounts[i]}("");
             require(success, "ETH transfer failed");
             unchecked {
                 ++i;
@@ -425,10 +441,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         accumulatedRoyalties += taxFee;
         uint256 refund = msg.value - totalAmount - taxFee;
         if (refund > 0) {
-            (bool refundSuccess, ) = payable(msg.sender).call{
-                value: refund,
-                gas: 50000
-            }("");
+            (bool refundSuccess, ) = payable(msg.sender).call{value: refund}("");
             require(refundSuccess, "Refund failed");
         }
     }
@@ -440,7 +453,9 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function multiTransferERC20(
         address token,
         address[] calldata recipients,
-        uint256[] calldata amounts
+        uint256[] calldata amounts,
+        bool useMevProtection,
+        bytes32 salt
     )
         external
         payable
@@ -457,6 +472,18 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             ? maxRecipients
             : defaultRecipients;
         require(recipients.length <= currentRecipients, "Too many recipients");
+        if (useMevProtection) {
+        bytes32 commitmentHash = getTokenCommitmentHash(
+            msg.sender,
+            token,
+            recipients,
+            abi.encodePacked(amounts),
+            salt
+        );
+        require(validateCommitment(commitmentHash, msg.sender), 
+                "Invalid or expired commitment");
+        clearCommitment(commitmentHash);
+        }
         IERC20 erc20 = IERC20(token);
         uint256 totalFee = taxFee * recipients.length;
         require(msg.value == totalFee, "Incorrect tax fee");
@@ -480,7 +507,9 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function multiTransferERC721(
         address token,
         address[] calldata recipients,
-        uint256[] calldata tokenIds
+        uint256[] calldata tokenIds,
+        bool useMevProtection,
+        bytes32 salt
     )
         external
         payable
@@ -497,6 +526,18 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             ? maxRecipients
             : defaultRecipients;
         require(recipients.length <= currentRecipients, "Too many recipients");
+        if (useMevProtection) {
+            bytes32 commitmentHash = getTokenCommitmentHash(
+                msg.sender,
+                token,
+                recipients,
+                abi.encodePacked(tokenIds),
+                salt
+            );
+            require(validateCommitment(commitmentHash, msg.sender), 
+                    "Invalid or expired commitment");
+            clearCommitment(commitmentHash);
+        }
         IERC721 erc721 = IERC721(token);
         uint256 totalFee = taxFee * recipients.length;
         require(msg.value == totalFee, "Incorrect tax fee");
@@ -524,13 +565,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
                     string(abi.encodePacked("ERC721 transfer failed: ", reason))
                 );
             } catch {
-                emit TokenTransferFailed(
-                    token,
-                    msg.sender,
-                    to,
-                    id,
-                    "unknown error"
-                );
+                emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC721 transfer failed with unknown error");
                 unchecked {
                     ++i;
@@ -548,7 +583,9 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         address token,
         address[] calldata recipients,
         uint256[] calldata ids,
-        uint256[] calldata amounts
+        uint256[] calldata amounts,
+        bool useMevProtection,
+        bytes32 salt
     )
         external
         payable
@@ -568,6 +605,22 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             ? maxRecipients
             : defaultRecipients;
         require(recipients.length <= currentRecipients, "Too many recipients");
+        if (useMevProtection) {
+        bytes memory combinedData = abi.encodePacked(
+            keccak256(abi.encodePacked(ids)),
+            keccak256(abi.encodePacked(amounts))
+        );
+        bytes32 commitmentHash = getTokenCommitmentHash(
+            msg.sender,
+            token,
+            recipients,
+            combinedData,
+            salt
+        );
+        require(validateCommitment(commitmentHash, msg.sender), 
+                "Invalid or expired commitment");
+        clearCommitment(commitmentHash);
+        }
         IERC1155 erc1155 = IERC1155(token);
         uint256 totalFee = taxFee * recipients.length;
         require(msg.value == totalFee, "Incorrect tax fee");
@@ -584,13 +637,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             require(amt > 0, "Amount must be > 0");
             if (isContract(to)) {
                 try
-                    IERC1155Receiver(to).onERC1155Received(
-                        msg.sender,
-                        msg.sender,
-                        id,
-                        amt,
-                        ""
-                    )
+                    IERC1155Receiver(to).onERC1155Received(msg.sender, msg.sender, id, amt, "")
                 returns (bytes4 response) {
                     require(
                         response == IERC1155Receiver.onERC1155Received.selector,
@@ -610,13 +657,7 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
                     )
                 );
             } catch (bytes memory) {
-                emit TokenTransferFailed(
-                    token,
-                    msg.sender,
-                    to,
-                    id,
-                    "unknown error"
-                );
+                emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC1155 transfer failed with unknown error");
                 unchecked {
                     ++i;
@@ -624,10 +665,6 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
             }
         }
     }
-    /*********************************************************************/
-    /// @title Contract Configuration
-    /// @notice Functions for managing contract parameters
-    /*********************************************************************/
     /// @notice Grants a specific role to an address
     /// @dev Includes additional safeguards for role capacity limits
     /// @param role - The role identifier to grant (bytes32)
@@ -664,6 +701,88 @@ contract TransferSWIFT is AccessControlEnumerable, ReentrancyGuard, Pausable {
         }
         _revokeRole(role, account);
         emit RoleRevoked(role, account, msg.sender);
+    }
+    /// @notice Toggles MEV protection for the caller's transactions
+    /// @dev Allows users to enable/disable MEV protection for their transactions
+    /// @param enabled - True to enable MEV protection, false to disable
+    function setMevProtection(bool enabled) external {
+        mevProtectionEnabled = enabled;
+        emit MevProtectionSettingChanged(enabled, msg.sender);
+    }
+    /// @notice Updates the commitment window duration
+    /// @param newWindow - New commitment window duration in seconds
+    function updateCommitmentWindow(uint256 newWindow) external onlyAdmin {
+        require(newWindow >= 60 && newWindow <= 3600, "Window must be between 1-60 minutes");
+        commitmentWindow = newWindow;
+        emit CommitmentWindowUpdated(newWindow, msg.sender);
+    }
+    /// @notice Creates a commitment for a future transaction
+    /// @dev First step in the commit-reveal pattern for MEV protection
+    /// @param commitmentHash - Hash of the transaction details
+    function commitTransaction(bytes32 commitmentHash) external {
+        require(commitmentHash != bytes32(0), "Invalid commitment hash");
+        pendingCommitments[commitmentHash] = block.timestamp;
+        emit TransactionCommitted(msg.sender, commitmentHash, block.timestamp);
+    }
+    /// @notice Validates a transaction commitment
+    /// @dev Checks if commitment exists and is within the time window
+    /// @param commitmentHash - Hash to validate
+    /// @param committer - Address that created the commitment
+    /// @return valid - True if commitment is valid
+    function validateCommitment(bytes32 commitmentHash, address committer) internal view returns (bool valid) {
+        uint256 commitTime = pendingCommitments[commitmentHash];
+        return (
+            commitTime > 0 && 
+            block.timestamp >= commitTime && 
+            block.timestamp <= commitTime + commitmentWindow
+        );
+    }
+    /// @notice Clears a used commitment
+    /// @dev Should be called after a commitment is used
+    /// @param commitmentHash - Hash to clear
+    function clearCommitment(bytes32 commitmentHash) internal {
+        delete pendingCommitments[commitmentHash];
+    }
+    /// @notice Generates a commitment hash for ETH transfers
+    /// @dev Used to create consistent hashes for commit-reveal pattern
+    /// @param sender - Transaction sender
+    /// @param recipients - Array of recipient addresses
+    /// @param amounts - Array of transfer amounts
+    /// @param salt - Random value to prevent hash prediction
+    function getEthCommitmentHash(
+        address sender,
+        address[] calldata recipients,
+        uint256[] calldata amounts,
+        bytes32 salt
+    ) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(
+            sender,
+            keccak256(abi.encodePacked(recipients)),
+            keccak256(abi.encodePacked(amounts)),
+            salt
+        ));
+    }
+    /// @notice Generates a commitment hash for token transfers
+    /// @dev Used for ERC20/721/1155 transfers
+    /// @param sender - Transaction sender
+    /// @param token - Token contract address
+    /// @param recipients - Array of recipient addresses
+    /// @param tokenData - Additional token data (amounts or IDs)
+    /// @param salt - Random value to prevent hash prediction
+    function getTokenCommitmentHash(
+        address sender,
+        address token,
+        address[] calldata recipients,
+        bytes memory tokenData,
+        bytes32 salt
+    ) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(
+            sender,
+            token,
+            keccak256(abi.encodePacked(recipients)),
+            keccak256(tokenData),
+            salt
+        ));
     }
     /// @notice Transaction ratelimit
     /// @dev Sets transaction rate limit duration
