@@ -272,6 +272,12 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param newWindow - New commitment window duration in seconds
     /// @param changedBy - Address that changed the setting
     event CommitmentWindowUpdated(uint256 newWindow, address indexed changedBy);
+    /// @notice Emitted when a valid commitment is consumed
+    /// @dev Indicates successful use of MEV protection mechanism
+    /// @param user - Address that used the commitment
+    /// @param commitmentHash - The consumed commitment hash (indexed)
+    /// @param timestamp - Block timestamp of commitment usage
+    event CommitmentUsed(address indexed user, bytes32 indexed commitmentHash, uint256 timestamp);
 
     /*********************************************************************/
     /// @title Access Control Modifiers
@@ -299,10 +305,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Restricts access to administrators or moderators role holders
     /// @dev Combines two role checks into single modifier
     modifier onlyRoot() {
-        require(
-            hasRole(adminRole, msg.sender) || hasRole(modRole, msg.sender),
-            "Caller is not admin or mod"
-        );
+        require(hasRole(adminRole, msg.sender) || hasRole(modRole, msg.sender), "Caller is not admin or mod");
         _;
     }
     /// @notice Blacklist access control
@@ -316,10 +319,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Uses `rateLimitDuration` for cooldown calculation
     /// @dev Updates `lastUsed` timestamp after execution
     modifier enforceRateLimit() {
-        require(
-            block.timestamp >= lastUsed[msg.sender] + rateLimitDuration,
-            "Rate limit: Wait cooldown period"
-        );
+        require(block.timestamp >= lastUsed[msg.sender] + rateLimitDuration, "Rate limit: Wait cooldown period");
         lastUsed[msg.sender] = block.timestamp;
         _;
     }
@@ -332,28 +332,19 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Withdrawal request status
     /// @dev Enforces request state using timestamps and flags
     modifier noActiveWithdrawalRequest() {
-        require(
-            withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled,
-            "Active withdrawal request exists."
-        );
+        require(withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled, "Active withdrawal request exists.");
         _;
     }
     /// @notice Withdrawal timelock period
     /// @dev Enforces withdrawal time lock period
     modifier canWithdraw() {
-        require(
-            block.timestamp >= withdrawalRequest.requestTime + withdrawalDelay,
-            "The locking period has not expired yet"
-        );
+        require(block.timestamp >= withdrawalRequest.requestTime + withdrawalDelay, "The locking period has not expired yet");
         _;
     }
     /// @notice Withdrawal request cancel
     /// @dev Ensures request wasn't cancelled
     modifier isNotCancelled() {
-        require(
-            !withdrawalRequest.isCancelled,
-            "Withdrawal request is cancelled"
-        );
+        require(!withdrawalRequest.isCancelled, "Withdrawal request is cancelled");
         _;
     }
     /// @notice Validates basic requirements for batch transfers
@@ -427,12 +418,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         emergencyNotActive
         validateBatchTransfer(recipients, amounts.length)
     {
-        bytes32 commitmentHash = getEthCommitmentHash(
-            msg.sender,
-            recipients,
-            amounts,
-            salt
-        );
+        bytes32 commitmentHash = getEthCommitmentHash(msg.sender, recipients, amounts, salt);
         handleMevProtection(useMevProtection, commitmentHash);
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < recipients.length; ) {
@@ -482,16 +468,11 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         validateToken(token, 20)
         validateBatchTransfer(recipients, amounts.length)
     {
-        bytes32 commitmentHash = getTokenCommitmentHash(
-            msg.sender,
-            token,
-            recipients,
-            abi.encodePacked(amounts),
-            salt
-        );
+        bytes32 commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, abi.encodePacked(amounts), salt);
         handleMevProtection(useMevProtection, commitmentHash);
         IERC20 erc20 = IERC20(token);
         uint256 totalFee = collectTaxFee(recipients.length);
+        require(msg.value == totalFee, "Incorrect fee");
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 amt = amounts[i];
@@ -524,38 +505,23 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         validateToken(token, 721)
         validateBatchTransfer(recipients, tokenIds.length)
     {
-        bytes32 commitmentHash = getTokenCommitmentHash(
-            msg.sender,
-            token,
-            recipients,
-            abi.encodePacked(tokenIds),
-            salt
-        );
+        bytes32 commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, abi.encodePacked(tokenIds), salt);
         handleMevProtection(useMevProtection, commitmentHash);
         IERC721 erc721 = IERC721(token);
         uint256 totalFee = collectTaxFee(recipients.length);
+        require(msg.value == totalFee, "Incorrect fee");
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 id = tokenIds[i];
             validateRecipient(to);
             if (isContract(to)) {
-                require(
-                    IERC721Receiver(to).onERC721Received(
-                        msg.sender,
-                        msg.sender,
-                        id,
-                        ""
-                    ) == IERC721Receiver.onERC721Received.selector,
-                    "ERC721: Receiver rejected"
-                );
+                require(IERC721Receiver(to).onERC721Received(msg.sender, msg.sender, id, "") == IERC721Receiver.onERC721Received.selector, "ERC721: Receiver rejected");
             }
             try erc721.safeTransferFrom(msg.sender, to, id, "") {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
                 emit TokenTransferFailed(token, msg.sender, to, id, reason);
-                revert(
-                    string(abi.encodePacked("ERC721 transfer failed: ", reason))
-                );
+                revert(string(abi.encodePacked("ERC721 transfer failed: ", reason)));
             } catch {
                 emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC721 transfer failed with unknown error");
@@ -593,34 +559,23 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             keccak256(abi.encodePacked(ids)),
             keccak256(abi.encodePacked(amounts))
         );
-        bytes32 commitmentHash = getTokenCommitmentHash(
-            msg.sender,
-            token,
-            recipients,
-            combinedData,
-            salt
-        );
+        bytes32 commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, combinedData, salt);
         handleMevProtection(useMevProtection, commitmentHash);
         IERC1155 erc1155 = IERC1155(token);
         uint256 totalFee = collectTaxFee(recipients.length);
+        require(msg.value == totalFee, "Incorrect fee");
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 id = ids[i];
             uint256 amt = amounts[i];
             validateRecipient(to);
-            require(
-                erc1155.balanceOf(msg.sender, id) >= amt,
-                "Not enough balance"
-            );
+            require(erc1155.balanceOf(msg.sender, id) >= amt, "Not enough balance");
             require(amt > 0, "Amount must be > 0");
             if (isContract(to)) {
                 try
                     IERC1155Receiver(to).onERC1155Received(msg.sender, msg.sender, id, amt, "")
                 returns (bytes4 response) {
-                    require(
-                        response == IERC1155Receiver.onERC1155Received.selector,
-                        "ERC1155: Receiver rejected"
-                    );
+                    require(response == IERC1155Receiver.onERC1155Received.selector, "ERC1155: Receiver rejected");
                 } catch {
                     revert("ERC1155: Transfer to non-receiver contract");
                 }
@@ -629,11 +584,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
                 emit TokenTransferFailed(token, msg.sender, to, id, reason);
-                revert(
-                    string(
-                        abi.encodePacked("ERC1155 transfer failed: ", reason)
-                    )
-                );
+                revert(string(abi.encodePacked("ERC1155 transfer failed: ", reason)));
             } catch (bytes memory) {
                 emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC1155 transfer failed with unknown error");
@@ -647,10 +598,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Includes additional safeguards for role capacity limits
     /// @param role - The role identifier to grant (bytes32)
     /// @param account - The address receiving the role
-    function grantRole(
-        bytes32 role,
-        address account
-    ) public override(AccessControl, IAccessControl) onlyAdmin {
+    function grantRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin {
         require(account != address(0), "Zero address");
         require(!isContract(account), "Address must not be a contract");
         require(!hasRole(role, account), "Account already has this role");
@@ -666,15 +614,9 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Revokes a role from an address
     /// @param role - The role identifier to revoke
     /// @param account - The address losing the role
-    function revokeRole(
-        bytes32 role,
-        address account
-    ) public override(AccessControl, IAccessControl) onlyAdmin {
+    function revokeRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin {
         if (role == adminRole) {
-            require(
-                getRoleMemberCount(adminRole) > 1,
-                "Cannot remove last admin"
-            );
+            require(getRoleMemberCount(adminRole) > 1, "Cannot remove last admin");
             require(account != msg.sender, "Self-removal forbidden");
         }
         _revokeRole(role, account);
@@ -709,11 +651,8 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @return valid - True if commitment is valid
     function validateCommitment(bytes32 commitmentHash, address committer) internal view returns (bool valid) {
         uint256 commitTime = pendingCommitments[commitmentHash];
-        return (
-            commitTime > 0 && 
-            block.timestamp >= commitTime && 
-            block.timestamp <= commitTime + commitmentWindow
-        );
+        require(committer == msg.sender, "Invalid committer");
+        return (commitTime > 0 && block.timestamp >= commitTime && block.timestamp <= commitTime + commitmentWindow);
     }
     /// @notice Clears a used commitment
     /// @dev Should be called after a commitment is used
@@ -727,18 +666,8 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param recipients - Array of recipient addresses
     /// @param amounts - Array of transfer amounts
     /// @param salt - Random value to prevent hash prediction
-    function getEthCommitmentHash(
-        address sender,
-        address[] calldata recipients,
-        uint256[] calldata amounts,
-        bytes32 salt
-    ) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            sender,
-            keccak256(abi.encodePacked(recipients)),
-            keccak256(abi.encodePacked(amounts)),
-            salt
-        ));
+    function getEthCommitmentHash(address sender, address[] calldata recipients, uint256[] calldata amounts, bytes32 salt) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(sender, keccak256(abi.encodePacked(recipients)), keccak256(abi.encodePacked(amounts)), salt));
     }
     /// @notice Generates a commitment hash for token transfers
     /// @dev Used for ERC20/721/1155 transfers
@@ -747,20 +676,8 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param recipients - Array of recipient addresses
     /// @param tokenData - Additional token data (amounts or IDs)
     /// @param salt - Random value to prevent hash prediction
-    function getTokenCommitmentHash(
-        address sender,
-        address token,
-        address[] calldata recipients,
-        bytes memory tokenData,
-        bytes32 salt
-    ) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            sender,
-            token,
-            keccak256(abi.encodePacked(recipients)),
-            keccak256(tokenData),
-            salt
-        ));
+    function getTokenCommitmentHash(address sender, address token, address[] calldata recipients, bytes memory tokenData, bytes32 salt) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(sender, token, keccak256(abi.encodePacked(recipients)), keccak256(tokenData), salt));
     }
     /// @notice Handles MEV protection validation
     /// @param useMevProtection - Whether to use MEV protection
@@ -768,9 +685,9 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @return Whether the commitment is valid and should be processed
     function handleMevProtection(bool useMevProtection, bytes32 commitmentHash) internal returns (bool) {
         if (useMevProtection) {
-            require(validateCommitment(commitmentHash, msg.sender), 
-                    "Invalid or expired commitment");
+            require(validateCommitment(commitmentHash, msg.sender), "Invalid or expired commitment");
             clearCommitment(commitmentHash);
+            emit CommitmentUsed(msg.sender, commitmentHash, block.timestamp);
         }
         return true;
     }
@@ -816,10 +733,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Updates the allowed number of recipients for a single transaction
     /// @param newLimit - New recipient limit to set
     function updateRecipientLimit(uint256 newLimit) external onlyRoot {
-        require(
-            newLimit >= defaultRecipients && newLimit <= maxRecipients,
-            "Limit out of bounds"
-        );
+        require(newLimit >= defaultRecipients && newLimit <= maxRecipients, "Limit out of bounds");
         currentRecipients = newLimit;
         emit RecipientLimitUpdated(newLimit);
     }
@@ -873,9 +787,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whitelistERC20[token] = true;
         emit WhitelistERC20Updated(token, true);
     }
-    function batchAddWhitelistERC20(
-        address[] calldata tokens
-    ) external onlyRoot {
+    function batchAddWhitelistERC20(address[] calldata tokens) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             addWhitelistERC20(tokens[i]);
         }
@@ -886,9 +798,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whitelistERC20[token] = false;
         emit WhitelistERC20Updated(token, false);
     }
-    function batchDelWhitelistERC20(
-        address[] calldata tokens
-    ) external onlyRoot {
+    function batchDelWhitelistERC20(address[] calldata tokens) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             delWhitelistERC20(tokens[i]);
         }
@@ -901,9 +811,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whitelistERC721[token] = true;
         emit WhitelistERC721Updated(token, true);
     }
-    function batchAddWhitelistERC721(
-        address[] calldata tokens
-    ) external onlyRoot {
+    function batchAddWhitelistERC721(address[] calldata tokens) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             addWhitelistERC721(tokens[i]);
         }
@@ -914,9 +822,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whitelistERC721[token] = false;
         emit WhitelistERC721Updated(token, false);
     }
-    function batchDelWhitelistERC721(
-        address[] calldata tokens
-    ) external onlyRoot {
+    function batchDelWhitelistERC721(address[] calldata tokens) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             delWhitelistERC721(tokens[i]);
         }
@@ -929,9 +835,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whitelistERC1155[token] = true;
         emit WhitelistERC1155Updated(token, true);
     }
-    function batchAddWhitelistERC1155(
-        address[] calldata tokens
-    ) external onlyRoot {
+    function batchAddWhitelistERC1155(address[] calldata tokens) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             addWhitelistERC1155(tokens[i]);
         }
@@ -942,9 +846,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         whitelistERC1155[token] = false;
         emit WhitelistERC1155Updated(token, false);
     }
-    function batchDelWhitelistERC1155(
-        address[] calldata tokens
-    ) external onlyRoot {
+    function batchDelWhitelistERC1155(address[] calldata tokens) external onlyRoot {
         for (uint256 i = 0; i < tokens.length; i++) {
             delWhitelistERC1155(tokens[i]);
         }
@@ -1021,21 +923,9 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param withdrawalType - Withdrawal category identifier
     /// @param tokenAddress - Token contract address (required for ERC20/ERC721/ERC1155)
     /// @param tokenId - Token ID (required for ERC721/ERC1155)
-    function requestWithdrawal(
-        uint256 amount,
-        bytes32 withdrawalType,
-        address tokenAddress,
-        uint256 tokenId
-    ) external onlyAdmin noActiveWithdrawalRequest {
-        require(
-            withdrawalRequest.requestTime == 0 ||
-                withdrawalRequest.isCancelled ||
-                block.timestamp > withdrawalRequest.requestTime + 7 days,
-            "Active withdrawal request exists. Cancel it first or wait for expiration."
-        );
-        uint256 availableEthBalance = address(this).balance -
-            accumulatedRoyalties;
-
+    function requestWithdrawal(uint256 amount, bytes32 withdrawalType, address tokenAddress, uint256 tokenId) external onlyAdmin noActiveWithdrawalRequest {
+        require(withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled || block.timestamp > withdrawalRequest.requestTime + 7 days, "Active withdrawal request exists. Cancel it first or wait for expiration.");
+        uint256 availableEthBalance = address(this).balance - accumulatedRoyalties;
         if (withdrawalType == withdrawalTypeRoyalties) {
             require(
                 amount > 0 && amount <= accumulatedRoyalties,
@@ -1079,10 +969,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             });
         } else if (withdrawalType == withdrawalTypeERC721) {
             require(tokenAddress != address(0), "Token address required");
-            require(
-                IERC721(tokenAddress).ownerOf(tokenId) == address(this),
-                "ERC721 not owned"
-            );
+            require(IERC721(tokenAddress).ownerOf(tokenId) == address(this), "ERC721 not owned");
             withdrawalRequest = WithdrawalRequest({
                 amount: 1,
                 requestTime: block.timestamp,
@@ -1095,10 +982,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             });
         } else if (withdrawalType == withdrawalTypeERC1155) {
             require(tokenAddress != address(0), "Token address required");
-            uint256 balance = IERC1155(tokenAddress).balanceOf(
-                address(this),
-                tokenId
-            );
+            uint256 balance = IERC1155(tokenAddress).balanceOf(address(this), tokenId);
             require(amount > 0 && amount <= balance, "Invalid ERC1155 amount");
             withdrawalRequest = WithdrawalRequest({
                 amount: amount,
@@ -1117,10 +1001,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     }
     /// @notice Initiates cancellation of a pending withdrawal
     function cancelWithdrawal() external onlyAdmin {
-        require(
-            withdrawalRequest.requestTime > 0,
-            "No withdrawal request exists"
-        );
+        require(withdrawalRequest.requestTime > 0, "No withdrawal request exists");
         require(!withdrawalRequest.isCancelled, "Request already cancelled");
         withdrawalRequest.isCancelled = true;
         emit WithdrawalCancelled();
@@ -1139,82 +1020,36 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         address tokenAddress = withdrawalRequest.tokenAddress;
         uint256 tokenId = withdrawalRequest.tokenId;
         if (withdrawalType == withdrawalTypeRoyalties) {
-            require(
-                amount <= withdrawalRequest.availableRoyaltiesBalance,
-                "Royalties reduced"
-            );
+            require(amount <= withdrawalRequest.availableRoyaltiesBalance, "Royalties reduced");
             accumulatedRoyalties -= amount;
-            (bool success, ) = payable(owner).call{value: amount, gas: 50000}(
-                ""
-            );
+            (bool success, ) = payable(owner).call{value: amount}("");
             require(success, "ETH (royalties) transfer failed");
         } else if (withdrawalType == withdrawalTypeETH) {
-            uint256 currentAvailable = address(this).balance -
-                accumulatedRoyalties;
-            require(
-                currentAvailable >= withdrawalRequest.availableEthBalance,
-                "ETH balance reduced"
-            );
-            require(
-                amount <= withdrawalRequest.availableEthBalance,
-                "ETH over requested"
-            );
-            (bool success, ) = payable(owner).call{value: amount, gas: 50000}(
-                ""
-            );
+            uint256 currentAvailable = address(this).balance - accumulatedRoyalties;
+            require(currentAvailable >= withdrawalRequest.availableEthBalance, "ETH balance reduced");
+            require(amount <= withdrawalRequest.availableEthBalance, "ETH over requested");
+            (bool success, ) = payable(owner).call{value: amount}("");
             require(success, "ETH transfer failed");
         } else if (withdrawalType == withdrawalTypeERC20) {
-            require(
-                IERC20(tokenAddress).balanceOf(address(this)) >= amount,
-                "ERC20 insufficient"
-            );
-            bool sent = IERC20(tokenAddress).transfer(owner, amount);
+            require(IERC20(tokenAddress).balanceOf(address(this)) >= amount, "ERC20 insufficient"ы);
+            SafeERC20.safeTransfer(IERC20(tokenAddress), owner, amount);
             require(sent, "ERC20 transfer failed");
         } else if (withdrawalType == withdrawalTypeERC721) {
-            require(
-                IERC721(tokenAddress).ownerOf(tokenId) == address(this),
-                "Not owner of ERC721"
-            );
-            IERC721(tokenAddress).safeTransferFrom(
-                address(this),
-                owner,
-                tokenId
-            );
+            require(IERC721(tokenAddress).ownerOf(tokenId) == address(this), "Not owner of ERC721");
+            IERC721(tokenAddress).safeTransferFrom(address(this), owner, tokenId);
         } else if (withdrawalType == withdrawalTypeERC1155) {
-            require(
-                IERC1155(tokenAddress).balanceOf(address(this), tokenId) >=
-                    amount,
-                "ERC1155 insufficient"
-            );
-            IERC1155(tokenAddress).safeTransferFrom(
-                address(this),
-                owner,
-                tokenId,
-                amount,
-                ""
-            );
+            require(IERC1155(tokenAddress).balanceOf(address(this), tokenId) >= amount, "ERC1155 insufficient");
+            IERC1155(tokenAddress).safeTransferFrom(address(this), owner, tokenId, amount, "");
         } else {
             revert("Unsupported withdrawal type");
         }
-
-        withdrawalRequest = WithdrawalRequest(
-            0,
-            0,
-            true,
-            "",
-            address(0),
-            0,
-            0,
-            0
-        );
+        withdrawalRequest = WithdrawalRequest(0, 0, true, "", address(0), 0, 0, 0);
         emit WithdrawalCompleted(amount);
     }
     /// @notice Interfaces support
     /// @dev Low-level query to check supported interfaces
     /// @return - Returns True for supported interfaces (IERC20, IERC721, IERC1155).
-    function supportsInterface(
-        bytes4 interfaceId
-    ) public view virtual override returns (bool) {
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
         return
             super.supportsInterface(interfaceId) ||
             interfaceId == type(IERC20).interfaceId ||
