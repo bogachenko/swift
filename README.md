@@ -1,3 +1,3 @@
-## TransferSWIFT
+## SWIFT Protocol
 
-TransferSWIFT is a universal contract for batch transfers of native coins and tokens. 
+SWIFT Protocol is a universal contract for batch transfers of native coins and tokens. 
