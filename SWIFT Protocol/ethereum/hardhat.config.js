@@ -17,5 +17,8 @@ require("@nomicfoundation/hardhat-toolbox"), require("@openzeppelin/hardhat-upgr
 	},
 	etherscan: {
 		apiKey: process.env.ETHERSCAN_API_KEY
+	},
+	sourcify: {
+  		enabled: true
 	}
 };
