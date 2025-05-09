@@ -356,6 +356,32 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         );
         _;
     }
+    /// @notice Validates basic requirements for batch transfers
+    /// @param recipients - Array of recipient addresses
+    /// @param dataLength - Length of the data array (amounts or tokenIds)
+    modifier validateBatchTransfer(address[] calldata recipients, uint256 dataLength) {
+        require(recipients.length == dataLength, "Mismatched arrays");
+        require(recipients.length > 0, "Empty recipient array");
+        uint256 allowedRecipients = extendedRecipients[msg.sender]
+            ? maxRecipients
+            : defaultRecipients;
+        require(recipients.length <= currentRecipients, "Too many recipients");
+        _;
+    }
+    /// @notice Validates token address and its whitelist status
+    /// @param token - Token contract address
+    /// @param tokenType - Type of token (20 for ERC20, 721 for ERC721, 1155 for ERC1155)
+    modifier validateToken(address token, uint8 tokenType) {
+        require(token != address(0), "Invalid token address");
+        if (tokenType == 20) {
+            require(whitelistERC20[token], "Token not whitelisted");
+        } else if (tokenType == 721) {
+            require(whitelistERC721[token], "Token not whitelisted");
+        } else if (tokenType == 1155) {
+            require(whitelistERC1155[token], "Token not whitelisted");
+        }
+        _;
+    }
 
     /*********************************************************************/
     /// @title Core Contract Functions
@@ -399,30 +425,20 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
+        validateBatchTransfer(recipients, amounts.length)
     {
-        require(recipients.length == amounts.length, "Mismatched arrays");
-        require(recipients.length > 0, "Empty recipient array");
-        uint256 allowedRecipients = extendedRecipients[msg.sender]
-            ? maxRecipients
-            : defaultRecipients;
-        require(recipients.length <= currentRecipients, "Too many recipients");
-            if (useMevProtection) {
         bytes32 commitmentHash = getEthCommitmentHash(
             msg.sender,
             recipients,
             amounts,
             salt
         );
-        require(validateCommitment(commitmentHash, msg.sender), 
-                "Invalid or expired commitment");
-        clearCommitment(commitmentHash);
-        }
+        handleMevProtection(useMevProtection, commitmentHash);
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < recipients.length; ) {
             address recipient = recipients[i];
             uint256 amount = amounts[i];
-            require(recipient != address(0), "Zero address recipient");
-            require(!blacklist[recipient], "Blacklisted recipient");
+            validateRecipient(recipient);
             require(amount > 0, "Zero amount transfer");
             totalAmount += amount;
             require(totalAmount >= amount, "Arithmetic overflow");
@@ -463,16 +479,9 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
+        validateToken(token, 20)
+        validateBatchTransfer(recipients, amounts.length)
     {
-        require(token != address(0), "Invalid token address");
-        require(whitelistERC20[token], "Token not whitelisted");
-        require(recipients.length == amounts.length, "Mismatched arrays");
-        require(recipients.length > 0, "Empty recipient array");
-        uint256 allowedRecipients = extendedRecipients[msg.sender]
-            ? maxRecipients
-            : defaultRecipients;
-        require(recipients.length <= currentRecipients, "Too many recipients");
-        if (useMevProtection) {
         bytes32 commitmentHash = getTokenCommitmentHash(
             msg.sender,
             token,
@@ -480,18 +489,13 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             abi.encodePacked(amounts),
             salt
         );
-        require(validateCommitment(commitmentHash, msg.sender), 
-                "Invalid or expired commitment");
-        clearCommitment(commitmentHash);
-        }
+        handleMevProtection(useMevProtection, commitmentHash);
         IERC20 erc20 = IERC20(token);
-        uint256 totalFee = taxFee * recipients.length;
-        require(msg.value == totalFee, "Incorrect tax fee");
-        accumulatedRoyalties += totalFee;
+        uint256 totalFee = collectTaxFee(recipients.length);
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 amt = amounts[i];
-            require(to != address(0) && !blacklist[to], "Invalid recipient");
+            validateRecipient(to);
             require(amt > 0, "Amount must be > 0");
             SafeERC20.safeTransferFrom(erc20, msg.sender, to, amt);
             unchecked {
@@ -517,35 +521,23 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
+        validateToken(token, 721)
+        validateBatchTransfer(recipients, tokenIds.length)
     {
-        require(token != address(0), "Invalid token address");
-        require(whitelistERC721[token], "Token not whitelisted");
-        require(recipients.length == tokenIds.length, "Mismatched arrays");
-        require(recipients.length > 0, "Empty recipient array");
-        uint256 allowedRecipients = extendedRecipients[msg.sender]
-            ? maxRecipients
-            : defaultRecipients;
-        require(recipients.length <= currentRecipients, "Too many recipients");
-        if (useMevProtection) {
-            bytes32 commitmentHash = getTokenCommitmentHash(
-                msg.sender,
-                token,
-                recipients,
-                abi.encodePacked(tokenIds),
-                salt
-            );
-            require(validateCommitment(commitmentHash, msg.sender), 
-                    "Invalid or expired commitment");
-            clearCommitment(commitmentHash);
-        }
+        bytes32 commitmentHash = getTokenCommitmentHash(
+            msg.sender,
+            token,
+            recipients,
+            abi.encodePacked(tokenIds),
+            salt
+        );
+        handleMevProtection(useMevProtection, commitmentHash);
         IERC721 erc721 = IERC721(token);
-        uint256 totalFee = taxFee * recipients.length;
-        require(msg.value == totalFee, "Incorrect tax fee");
-        accumulatedRoyalties += totalFee;
+        uint256 totalFee = collectTaxFee(recipients.length);
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 id = tokenIds[i];
-            require(to != address(0) && !blacklist[to], "Invalid recipient");
+            validateRecipient(to);
             if (isContract(to)) {
                 require(
                     IERC721Receiver(to).onERC721Received(
@@ -567,9 +559,9 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             } catch {
                 emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC721 transfer failed with unknown error");
-                unchecked {
-                    ++i;
-                }
+            }
+            unchecked {
+                ++i;
             }
         }
     }
@@ -593,19 +585,10 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
+        validateToken(token, 1155)
+        validateBatchTransfer(recipients, ids.length)
     {
-        require(token != address(0), "Invalid token address");
-        require(whitelistERC1155[token], "Token not whitelisted");
-        require(
-            recipients.length == ids.length && ids.length == amounts.length,
-            "Mismatched arrays"
-        );
-        require(recipients.length > 0, "Empty recipient array");
-        uint256 allowedRecipients = extendedRecipients[msg.sender]
-            ? maxRecipients
-            : defaultRecipients;
-        require(recipients.length <= currentRecipients, "Too many recipients");
-        if (useMevProtection) {
+        require(ids.length == amounts.length, "Mismatched ids and amounts");
         bytes memory combinedData = abi.encodePacked(
             keccak256(abi.encodePacked(ids)),
             keccak256(abi.encodePacked(amounts))
@@ -617,19 +600,14 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             combinedData,
             salt
         );
-        require(validateCommitment(commitmentHash, msg.sender), 
-                "Invalid or expired commitment");
-        clearCommitment(commitmentHash);
-        }
+        handleMevProtection(useMevProtection, commitmentHash);
         IERC1155 erc1155 = IERC1155(token);
-        uint256 totalFee = taxFee * recipients.length;
-        require(msg.value == totalFee, "Incorrect tax fee");
-        accumulatedRoyalties += totalFee;
+        uint256 totalFee = collectTaxFee(recipients.length);
         for (uint256 i = 0; i < recipients.length; ) {
             address to = recipients[i];
             uint256 id = ids[i];
             uint256 amt = amounts[i];
-            require(to != address(0) && !blacklist[to], "Invalid recipient");
+            validateRecipient(to);
             require(
                 erc1155.balanceOf(msg.sender, id) >= amt,
                 "Not enough balance"
@@ -659,9 +637,9 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             } catch (bytes memory) {
                 emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC1155 transfer failed with unknown error");
-                unchecked {
-                    ++i;
-                }
+            }
+            unchecked {
+                ++i;
             }
         }
     }
@@ -783,6 +761,35 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             keccak256(tokenData),
             salt
         ));
+    }
+    /// @notice Handles MEV protection validation
+    /// @param useMevProtection - Whether to use MEV protection
+    /// @param commitmentHash - Hash of the transaction details
+    /// @return Whether the commitment is valid and should be processed
+    function handleMevProtection(bool useMevProtection, bytes32 commitmentHash) internal returns (bool) {
+        if (useMevProtection) {
+            require(validateCommitment(commitmentHash, msg.sender), 
+                    "Invalid or expired commitment");
+            clearCommitment(commitmentHash);
+        }
+        return true;
+    }
+    /// @notice Validates recipient address
+    /// @param recipient - Address to validate
+    /// @return Whether the address is valid
+    function validateRecipient(address recipient) internal view returns (bool) {
+        require(recipient != address(0), "Zero address recipient");
+        require(!blacklist[recipient], "Blacklisted recipient");
+        return true;
+    }
+    /// @notice Validates and collects the tax fee
+    /// @param recipientCount - Number of recipients
+    /// @return Total fee collected
+    function collectTaxFee(uint256 recipientCount) internal returns (uint256) {
+        uint256 totalFee = taxFee * recipientCount;
+        require(msg.value >= totalFee, "Insufficient fee");
+        accumulatedRoyalties += totalFee;
+        return totalFee;
     }
     /// @notice Transaction ratelimit
     /// @dev Sets transaction rate limit duration
