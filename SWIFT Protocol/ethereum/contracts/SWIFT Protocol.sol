@@ -18,7 +18,7 @@ import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
 /// @author Bogachenko Vyacheslav
 /// @notice SWIFT Protocol is a universal contract for batch transfers of native coins and tokens.
 /// @custom:licence License: MIT
-/// @custom:version Version 0.0.0.8 (unstable)
+/// @custom:version Version 0.0.0.9 (unstable)
 
 contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /*********************************************************************/
@@ -371,7 +371,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Validates token address and its whitelist status
     /// @param token - Token contract address
     /// @param tokenType - Type of token (20 for ERC20, 721 for ERC721, 1155 for ERC1155)
-    modifier validateToken(address token, uint8 tokenType) {
+    modifier validateToken(address token, uint16 tokenType) {
         require(token != address(0), "Invalid token address");
         if (tokenType == 20) {
             require(whitelistERC20[token], "Token not whitelisted");
