@@ -138,6 +138,12 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Token contract addresses permitted for transactions
     /// @return isWhitelisted - True if token is approved
     mapping(address => bool) public whitelistERC1155;
+    /// @notice Whitelist registry for approved token contracts
+    /// @dev Nested mapping tracking allowed tokens per standard
+    /// @param standard - The token standard (ERC20/ERC721/ERC1155)
+    /// @param token - The token contract address to check
+    /// @return bool - True if token is whitelisted for its standard
+    mapping(tokenType => mapping(address => bool)) public whitelist;
     /// @notice Mapping to store transaction commitments
     /// @dev Maps commitment hash to its timestamp
     mapping(bytes32 => uint256) public pendingCommitments;
@@ -162,6 +168,21 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         uint256 tokenId;
         uint256 availableEthBalance;
         uint256 availableRoyaltiesBalance;
+    }
+
+    /*********************************************************************/
+    /// @title Contains the necessary data to process requests in the contract
+    /// @notice Implements security measures using templates
+    /*********************************************************************/
+    /// @notice Enum representing different token standards
+    /// @dev Used to categorize whitelisted tokens
+    /// @param ERC20 - Fungible token standard
+    /// @param ERC721 - Non-fungible token (NFT) standard
+    /// @param ERC1155 - Multi-token standard
+    enum tokenType {
+        ERC20,
+        ERC721,
+        ERC1155
     }
 
     /*********************************************************************/
@@ -222,21 +243,12 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param user - Modified address
     /// @param status - New status (true = blacklisted)
     event BlacklistUpdated(address indexed user, bool status);
-    /// @notice Emitted when ERC20 token is whitelisted
+    /// @notice Emitted when a token's whitelist status changes
     /// @dev Controls allowed tokens for operations
-    /// @param token - ERC20 contract address
-    /// @param status - New status (true = allowed)
-    event WhitelistERC20Updated(address indexed token, bool status);
-    /// @notice Emitted when ERC721 token is whitelisted
-    /// @dev Controls allowed tokens for operations
-    /// @param token - ERC721 contract address
-    /// @param status - New status (true = allowed)
-    event WhitelistERC721Updated(address indexed token, bool status);
-    /// @notice Emitted when ERC1155 token is whitelisted
-    /// @dev Controls allowed tokens for operations
-    /// @param token - ERC1155 contract address
-    /// @param status - New status (true = allowed)
-    event WhitelistERC1155Updated(address indexed token, bool status);
+    /// @param standard Token standard category
+    /// @param token - Token contract address
+    /// @param status - New whitelist status (true = added, false = removed)
+    event WhitelistUpdated(tokenType indexed standard, address indexed token, bool status);
     /// @notice Emitted when the transaction fee is updated
     /// @dev Signals a change in the protocol's tax fee percentage
     /// @param newFee - New fee value in wei
@@ -749,106 +761,42 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         return size > 0;
     }
     /// @notice Blacklist management
-    /// @dev Blacklisted addresses cannot interact with contract
-    /// @param user - Addresses of contracts or EOA wallets
-    function addBlacklist(address user) public onlyRoot {
-        require(user != address(0), "Zero address cannot be blacklisted");
-        require(!blacklist[user], "Address already blacklisted");
-        blacklist[user] = true;
-        emit BlacklistUpdated(user, true);
-    }
-    function batchAddBlacklist(address[] calldata users) external onlyRoot {
-        for (uint256 i = 0; i < users.length; i++) {
-            require(users[i] != address(0), "Zero address");
-            require(!blacklist[users[i]], "Already blacklisted");
-            blacklist[users[i]] = true;
-            emit BlacklistUpdated(users[i], true);
-        }
-    }
-    function delBlacklist(address user) public onlyRoot {
-        require(user != address(0), "Zero address cannot be unblacklisted");
-        require(blacklist[user], "Address not in blacklist");
-        blacklist[user] = false;
-        emit BlacklistUpdated(user, false);
-    }
-    function batchDelBlacklist(address[] calldata users) external onlyRoot {
-        for (uint256 i = 0; i < users.length; i++) {
-            require(users[i] != address(0), "Zero address");
-            require(blacklist[users[i]], "Address not in blacklist");
-            blacklist[users[i]] = false;
-            emit BlacklistUpdated(users[i], false);
+    /// @dev Functions for managing restricted addresses
+    /// @param users - Array of addresses to update
+    /// @param status - New blacklist status (true = add, false = remove)
+    function updateBlacklist(address[] calldata users, bool status) external onlyRoot {
+        uint256 len = users.length;
+        require(len > 0, "Empty list");
+        for (uint256 i; i < len; ) {
+            address user = users[i];
+            require(user != address(0), "Zero address");
+            if (status) {
+                require(!blacklist[user], "Already blacklisted");
+            } else {
+                require(blacklist[user], "Not in blacklist");
+            }
+            blacklist[user] = status;
+            emit BlacklistUpdated(user, status);
+            unchecked { ++i; }
         }
     }
     /// @notice Whitelist management
-    /// @dev Whitelisted addresses can interact with the contract
-    /// @param token - ERC20 contract address
-    function addWhitelistERC20(address token) public onlyRoot {
-        require(isContract(token), "Address must be a contract");
-        whitelistERC20[token] = true;
-        emit WhitelistERC20Updated(token, true);
-    }
-    function batchAddWhitelistERC20(address[] calldata tokens) external onlyRoot {
-        for (uint256 i = 0; i < tokens.length; i++) {
-            addWhitelistERC20(tokens[i]);
-        }
-    }
-    function delWhitelistERC20(address token) public onlyRoot {
-        require(isContract(token), "Address must be a contract");
-        require(whitelistERC20[token], "Token not in whitelist");
-        whitelistERC20[token] = false;
-        emit WhitelistERC20Updated(token, false);
-    }
-    function batchDelWhitelistERC20(address[] calldata tokens) external onlyRoot {
-        for (uint256 i = 0; i < tokens.length; i++) {
-            delWhitelistERC20(tokens[i]);
-        }
-    }
-    /// @notice Manages ERC721 token whitelist
-    /// @dev Whitelisted addresses can interact with the contract
-    /// @param token - ERC721 contract address
-    function addWhitelistERC721(address token) public onlyRoot {
-        require(isContract(token), "Address must be a contract");
-        whitelistERC721[token] = true;
-        emit WhitelistERC721Updated(token, true);
-    }
-    function batchAddWhitelistERC721(address[] calldata tokens) external onlyRoot {
-        for (uint256 i = 0; i < tokens.length; i++) {
-            addWhitelistERC721(tokens[i]);
-        }
-    }
-    function delWhitelistERC721(address token) public onlyRoot {
-        require(isContract(token), "Address must be a contract");
-        require(whitelistERC721[token], "Token not in whitelist");
-        whitelistERC721[token] = false;
-        emit WhitelistERC721Updated(token, false);
-    }
-    function batchDelWhitelistERC721(address[] calldata tokens) external onlyRoot {
-        for (uint256 i = 0; i < tokens.length; i++) {
-            delWhitelistERC721(tokens[i]);
-        }
-    }
-    /// @notice Manages ERC1155 token whitelist
-    /// @dev Whitelisted addresses can interact with the contract
-    /// @param token - ERC1155 contract address
-    function addWhitelistERC1155(address token) public onlyRoot {
-        require(isContract(token), "Address must be a contract");
-        whitelistERC1155[token] = true;
-        emit WhitelistERC1155Updated(token, true);
-    }
-    function batchAddWhitelistERC1155(address[] calldata tokens) external onlyRoot {
-        for (uint256 i = 0; i < tokens.length; i++) {
-            addWhitelistERC1155(tokens[i]);
-        }
-    }
-    function delWhitelistERC1155(address token) public onlyRoot {
-        require(isContract(token), "Address must be a contract");
-        require(whitelistERC1155[token], "Token not in whitelist");
-        whitelistERC1155[token] = false;
-        emit WhitelistERC1155Updated(token, false);
-    }
-    function batchDelWhitelistERC1155(address[] calldata tokens) external onlyRoot {
-        for (uint256 i = 0; i < tokens.length; i++) {
-            delWhitelistERC1155(tokens[i]);
+    /// @dev Functions for managing approved token contracts
+    /// @param standard - Token standard to update (ERC20/ERC721/ERC1155)
+    /// @param tokens - Array of token contract addresses
+    /// @param status - New whitelist status (true = add, false = remove)
+    function updateWhitelist(tokenType standard, address[] calldata tokens, bool status) external onlyRoot {
+        uint256 len = tokens.length;
+        require(len > 0, "No tokens");
+        for (uint256 i; i < len; ) {
+            address token = tokens[i];
+            require(isContract(token), "Not a contract");
+            if (!status) {
+                require(whitelist[standard][token], "Not in whitelist");
+            }
+            whitelist[standard][token] = status;
+            emit WhitelistUpdated(standard, token, status);
+            unchecked { ++i; }
         }
     }
     /// @notice Initiates ownership transfer
@@ -923,80 +871,46 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param withdrawalType - Withdrawal category identifier
     /// @param tokenAddress - Token contract address (required for ERC20/ERC721/ERC1155)
     /// @param tokenId - Token ID (required for ERC721/ERC1155)
-    function requestWithdrawal(uint256 amount, bytes32 withdrawalType, address tokenAddress, uint256 tokenId) external onlyAdmin noActiveWithdrawalRequest {
-        require(withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled || block.timestamp > withdrawalRequest.requestTime + 7 days, "Active withdrawal request exists. Cancel it first or wait for expiration.");
-        uint256 availableEthBalance = address(this).balance - accumulatedRoyalties;
+        function requestWithdrawal(uint256 amount, bytes32 withdrawalType, address tokenAddress, uint256 tokenId) external onlyAdmin noActiveWithdrawalRequest {
+        require(withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled || block.timestamp > withdrawalRequest.requestTime + 7 days, "Active withdrawal request exists");
+        WithdrawalRequest memory newRequest = WithdrawalRequest({
+            amount: amount,
+            requestTime: block.timestamp,
+            isCancelled: false,
+            withdrawalType: withdrawalType,
+            tokenAddress: address(0),
+            tokenId: 0,
+            availableEthBalance: 0,
+            availableRoyaltiesBalance: 0
+        });
         if (withdrawalType == withdrawalTypeRoyalties) {
-            require(
-                amount > 0 && amount <= accumulatedRoyalties,
-                "Invalid royalties"
-            );
-            withdrawalRequest = WithdrawalRequest({
-                amount: amount,
-                requestTime: block.timestamp,
-                isCancelled: false,
-                withdrawalType: withdrawalType,
-                tokenAddress: address(0),
-                tokenId: 0,
-                availableEthBalance: 0,
-                availableRoyaltiesBalance: accumulatedRoyalties
-            });
+            require(amount > 0 && amount <= accumulatedRoyalties, "Invalid royalties");
+            newRequest.availableRoyaltiesBalance = accumulatedRoyalties;
         } else if (withdrawalType == withdrawalTypeETH) {
+            uint256 availableEthBalance = address(this).balance - accumulatedRoyalties;
             require(amount > 0 && amount <= availableEthBalance, "Invalid ETH");
-            withdrawalRequest = WithdrawalRequest({
-                amount: amount,
-                requestTime: block.timestamp,
-                isCancelled: false,
-                withdrawalType: withdrawalType,
-                tokenAddress: address(0),
-                tokenId: 0,
-                availableEthBalance: availableEthBalance,
-                availableRoyaltiesBalance: 0
-            });
+            newRequest.availableEthBalance = availableEthBalance;
         } else if (withdrawalType == withdrawalTypeERC20) {
             require(tokenAddress != address(0), "Token address required");
             uint256 balance = IERC20(tokenAddress).balanceOf(address(this));
             require(amount > 0 && amount <= balance, "Invalid ERC20 amount");
-            withdrawalRequest = WithdrawalRequest({
-                amount: amount,
-                requestTime: block.timestamp,
-                isCancelled: false,
-                withdrawalType: withdrawalType,
-                tokenAddress: tokenAddress,
-                tokenId: 0,
-                availableEthBalance: 0,
-                availableRoyaltiesBalance: 0
-            });
+            newRequest.tokenAddress = tokenAddress;
         } else if (withdrawalType == withdrawalTypeERC721) {
             require(tokenAddress != address(0), "Token address required");
             require(IERC721(tokenAddress).ownerOf(tokenId) == address(this), "ERC721 not owned");
-            withdrawalRequest = WithdrawalRequest({
-                amount: 1,
-                requestTime: block.timestamp,
-                isCancelled: false,
-                withdrawalType: withdrawalType,
-                tokenAddress: tokenAddress,
-                tokenId: tokenId,
-                availableEthBalance: 0,
-                availableRoyaltiesBalance: 0
-            });
+            newRequest.amount = 1; 
+            newRequest.tokenAddress = tokenAddress;
+            newRequest.tokenId = tokenId;
         } else if (withdrawalType == withdrawalTypeERC1155) {
             require(tokenAddress != address(0), "Token address required");
             uint256 balance = IERC1155(tokenAddress).balanceOf(address(this), tokenId);
             require(amount > 0 && amount <= balance, "Invalid ERC1155 amount");
-            withdrawalRequest = WithdrawalRequest({
-                amount: amount,
-                requestTime: block.timestamp,
-                isCancelled: false,
-                withdrawalType: withdrawalType,
-                tokenAddress: tokenAddress,
-                tokenId: tokenId,
-                availableEthBalance: 0,
-                availableRoyaltiesBalance: 0
-            });
+            newRequest.tokenAddress = tokenAddress;
+            newRequest.tokenId = tokenId;
         } else {
             revert("Unsupported withdrawal type");
         }
+        withdrawalRequest = newRequest;
         emit WithdrawalRequested(amount, block.timestamp);
     }
     /// @notice Initiates cancellation of a pending withdrawal
@@ -1015,31 +929,42 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         isNotCancelled
     {
         require(owner != address(0), "Owner not set");
-        uint256 amount = withdrawalRequest.amount;
-        bytes32 withdrawalType = withdrawalRequest.withdrawalType;
-        address tokenAddress = withdrawalRequest.tokenAddress;
-        uint256 tokenId = withdrawalRequest.tokenId;
-        if (withdrawalType == withdrawalTypeRoyalties) {
-            require(amount <= withdrawalRequest.availableRoyaltiesBalance, "Royalties reduced");
-            accumulatedRoyalties -= amount;
-            (bool success, ) = payable(owner).call{value: amount}("");
-            require(success, "ETH (royalties) transfer failed");
-        } else if (withdrawalType == withdrawalTypeETH) {
-            uint256 currentAvailable = address(this).balance - accumulatedRoyalties;
-            require(currentAvailable >= withdrawalRequest.availableEthBalance, "ETH balance reduced");
-            require(amount <= withdrawalRequest.availableEthBalance, "ETH over requested");
-            (bool success, ) = payable(owner).call{value: amount}("");
+        WithdrawalRequest memory request = withdrawalRequest;
+        uint256 amount = request.amount;
+        bytes32 wType = request.withdrawalType;
+        address token = request.tokenAddress;
+        uint256 id = request.tokenId;
+        bool success;
+        if (wType == withdrawalTypeRoyalties || wType == withdrawalTypeETH) {
+            uint256 available = wType == withdrawalTypeRoyalties 
+                ? request.availableRoyaltiesBalance 
+                : (address(this).balance - accumulatedRoyalties);
+            if(wType == withdrawalTypeETH) {
+                require(available >= request.availableEthBalance, "ETH balance reduced");
+                require(amount <= request.availableEthBalance, "ETH over requested");
+            } else {
+                require(amount <= available, "Royalties reduced");
+            }
+            (success, ) = payable(owner).call{value: amount}("");
             require(success, "ETH transfer failed");
-        } else if (withdrawalType == withdrawalTypeERC20) {
-            require(IERC20(tokenAddress).balanceOf(address(this)) >= amount, "ERC20 insufficient"ы);
-            SafeERC20.safeTransfer(IERC20(tokenAddress), owner, amount);
-            require(sent, "ERC20 transfer failed");
-        } else if (withdrawalType == withdrawalTypeERC721) {
-            require(IERC721(tokenAddress).ownerOf(tokenId) == address(this), "Not owner of ERC721");
-            IERC721(tokenAddress).safeTransferFrom(address(this), owner, tokenId);
-        } else if (withdrawalType == withdrawalTypeERC1155) {
-            require(IERC1155(tokenAddress).balanceOf(address(this), tokenId) >= amount, "ERC1155 insufficient");
-            IERC1155(tokenAddress).safeTransferFrom(address(this), owner, tokenId, amount, "");
+            if(wType == withdrawalTypeRoyalties) {
+                accumulatedRoyalties -= amount;
+            }
+        } else if (wType == withdrawalTypeERC20 || wType == withdrawalTypeERC1155) {
+            uint256 balance = wType == withdrawalTypeERC20 
+                ? IERC20(token).balanceOf(address(this)) 
+                : IERC1155(token).balanceOf(address(this), id);
+            require(amount <= balance, wType == withdrawalTypeERC20 
+                ? "ERC20 insufficient" 
+                : "ERC1155 insufficient");
+            if(wType == withdrawalTypeERC20) {
+                SafeERC20.safeTransfer(IERC20(token), owner, amount);
+            } else {
+                IERC1155(token).safeTransferFrom(address(this), owner, id, amount, "");
+            }
+        } else if (wType == withdrawalTypeERC721) {
+            require(IERC721(token).ownerOf(id) == address(this), "Not owner of ERC721");
+            IERC721(token).safeTransferFrom(address(this), owner, id);
         } else {
             revert("Unsupported withdrawal type");
         }
