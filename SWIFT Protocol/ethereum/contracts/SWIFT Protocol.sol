@@ -595,7 +595,8 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Includes additional safeguards for role capacity limits
     /// @param role - The role identifier to grant (bytes32)
     /// @param account - The address receiving the role
-    function grantRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin {
+    function grantRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin emergencyNotActive {
+        require(getRoleAdmin(role) == msg.sender, "Caller lacks admin privileges");
         require(account != address(0), "Zero address");
         require(!isContract(account), "Address must not be a contract");
         require(!hasRole(role, account), "Account already has this role");
@@ -611,7 +612,8 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Revokes a role from an address
     /// @param role - The role identifier to revoke
     /// @param account - The address losing the role
-    function revokeRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin {
+    function revokeRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin emergencyNotActive {
+        require(getRoleAdmin(role) == msg.sender, "Caller lacks admin privileges");
         if (role == adminRole) {
             require(getRoleMemberCount(adminRole) > 1, "Cannot remove last admin");
             require(account != msg.sender, "Self-removal forbidden");
@@ -693,12 +695,12 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @return Whether the address is valid
     function validateRecipient(address recipient) internal view returns (bool) {
         require(recipient != address(0), "Zero address recipient");
+        require(recipient != address(this), "Cannot send to contract itself");
         require(!blacklist[recipient], "Blacklisted recipient");
         return true;
     }
     /// @notice Validates and collects the tax fee
     /// @param recipientCount - Number of recipients
-    /// @return Total fee collected
     function collectTaxFee(uint256 recipientCount) internal returns (uint256) {
         uint256 totalFee = taxFee * recipientCount;
         require(msg.value >= totalFee, "Insufficient fee");
@@ -752,6 +754,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function updateBlacklist(address[] calldata users, bool status) external onlyRoot {
         uint256 len = users.length;
         require(len > 0, "Empty list");
+        require(len <= 100, "Too many addresses");
         for (uint256 i; i < len; ) {
             address user = users[i];
             require(user != address(0), "Zero address");
@@ -773,6 +776,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     function updateWhitelist(TokenWhitelist standard, address[] calldata tokens, bool status) external onlyRoot {
         uint256 len = tokens.length;
         require(len > 0, "No tokens");
+        require(len <= 100, "Too many addresses");
         for (uint256 i; i < len; ) {
             address token = tokens[i];
             require(isContract(token), "Not a contract");
