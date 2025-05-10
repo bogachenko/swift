@@ -169,6 +169,14 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         ERC721,
         ERC1155
     }
+    /// @notice Multitransfer token enumeration
+    /// @dev Classification of all tokens
+    enum TransferType {
+        ETH,
+        ERC20,
+        ERC721,
+        ERC1155
+    }
 
     /*********************************************************************/
     /// @title Contract lifecycle events
@@ -347,28 +355,13 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Validates basic requirements for batch transfers
     /// @param recipients - Array of recipient addresses
     /// @param dataLength - Length of the data array (amounts or tokenIds)
-    modifier validateBatchTransfer(address[] calldata recipients, uint256 dataLength) {
-        require(recipients.length == dataLength, "Mismatched arrays");
-        require(recipients.length > 0, "Empty recipient array");
-        uint256 allowedRecipients = extendedRecipients[msg.sender]
-            ? maxRecipients
-            : defaultRecipients;
-        require(recipients.length <= currentRecipients, "Too many recipients");
-        _;
-    }
-    /// @notice Validates token address and its whitelist status
-    /// @param token - Token contract address
-    /// @param tokenType - Type of token (20 for ERC20, 721 for ERC721, 1155 for ERC1155)
-    modifier validateToken(address token, uint16 tokenType) {
-        require(token != address(0), "Invalid token address");
-        if (tokenType == 20) {
-            require(whitelist[TokenWhitelist.ERC20][token], "Token not whitelisted");
-        } else if (tokenType == 721) {
-            require(whitelist[TokenWhitelist.ERC721][token], "Token not whitelisted");
-        } else if (tokenType == 1155) {
-            require(whitelist[TokenWhitelist.ERC1155][token], "Token not whitelisted");
-        }
-        _;
+    function _validateBatchTransfer(address[] calldata recipients, uint256 dataLength) internal view {
+    require(recipients.length == dataLength, "Mismatched arrays");
+    require(recipients.length > 0, "Empty recipient array");
+    uint256 allowedRecipients = extendedRecipients[msg.sender]
+        ? maxRecipients
+        : defaultRecipients;
+    require(recipients.length <= allowedRecipients, "Too many recipients");
     }
 
     /*********************************************************************/
@@ -397,13 +390,21 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @title Multitransfer operations
     /// @notice Functions for batch transfers
     /*********************************************************************/
-    /// @notice Multitransfer ETH
-    /// @dev Batch transfers ETH to multiple recipients
+    /// @notice Multitransfer
+    /// @dev Batch transfers to multiple recipients
+    /// @param transferType - Type of transfer (0: ETH, 1: ERC20, 2: ERC721, 3: ERC1155)
+    /// @param token - Address of token contract (required for ERC20/ERC721/ERC1155)
     /// @param recipients - Array of recipient addresses
-    /// @param amounts - Array of transfer amounts
-    function multiTransferETH(
+    /// @param values - For ETH/ERC20: amounts, for ERC721: token IDs, for ERC1155: token IDs
+    /// @param amounts - For ERC1155 only: quantities of each token to transfer
+    /// @param useMevProtection - Whether to enable MEV protection mechanisms
+    /// @param salt - Unique salt for commitment hash generation
+    function multiTransfer(
+        TransferType transferType,
+        address token,
         address[] calldata recipients,
-        uint256[] calldata amounts,
+        uint256[] calldata values,
+        uint256[] calldata amounts, 
         bool useMevProtection,
         bytes32 salt
     )
@@ -413,28 +414,68 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
-        validateBatchTransfer(recipients, amounts.length)
     {
-        bytes32 commitmentHash = getEthCommitmentHash(msg.sender, recipients, amounts, salt);
-        handleMevProtection(useMevProtection, commitmentHash);
-        uint256 totalAmount = 0;
+       _validateBatchTransfer(recipients, values.length);
+        if (transferType == TransferType.ERC20) {
+        require(token != address(0), "Token address required");
+        require(whitelist[TokenWhitelist.ERC20][token], "Token not whitelisted");
+    } else if (transferType == TransferType.ERC721) {
+        require(token != address(0), "Token address required");
+        require(whitelist[TokenWhitelist.ERC721][token], "Token not whitelisted");
+    } else if (transferType == TransferType.ERC1155) {
+        require(token != address(0), "Token address required");
+        require(whitelist[TokenWhitelist.ERC1155][token], "Token not whitelisted");
+    }
+        bytes32 commitmentHash;
+        if (transferType == TransferType.ETH || transferType == TransferType.ERC20) {
+            commitmentHash = transferType == TransferType.ETH
+                ? getEthCommitmentHash(msg.sender, recipients, values, salt)
+                : getTokenCommitmentHash(msg.sender, token, recipients, abi.encodePacked(values), salt);
+        } else if (transferType == TransferType.ERC721) {
+            commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, abi.encodePacked(values), salt);
+        } else if (transferType == TransferType.ERC1155) {
+            require(amounts.length == values.length, "Mismatched tokenIds and amounts");
+            bytes memory packedData = abi.encodePacked(
+                keccak256(abi.encodePacked(values)),
+                keccak256(abi.encodePacked(amounts))
+            );
+            commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, packedData, salt);
+        } else {
+            revert("Unsupported transfer type");
+        }
+        if (useMevProtection) {
+        require(validateCommitment(commitmentHash, msg.sender), "Invalid commitment");
+        clearCommitment(commitmentHash);
+        }
+        if (transferType == TransferType.ETH) {
+            _transferETH(recipients, values);
+        } else if (transferType == TransferType.ERC20) {
+            _transferERC20(token, recipients, values);
+        } else if (transferType == TransferType.ERC721) {
+            _transferERC721(token, recipients, values);
+        } else if (transferType == TransferType.ERC1155) {
+            _transferERC1155(token, recipients, values, amounts);
+        }
+    }
+    /// @notice Multitransfer ETH
+    /// @dev Batch transfers ETH to multiple recipients
+    /// @param recipients - Array of recipient addresses
+    /// @param amounts - Array of transfer amounts
+    function _transferETH(address[] calldata recipients, uint256[] calldata amounts) internal nonReentrant {
+        uint256 totalAmount;
         for (uint256 i = 0; i < recipients.length; ) {
             address recipient = recipients[i];
             uint256 amount = amounts[i];
             validateRecipient(recipient);
-            require(amount > 0, "Zero amount transfer");
+            require(amount > 0, "Zero amount");
             totalAmount += amount;
-            unchecked {
-                ++i;
-            }
+            unchecked { ++i; }
         }
         require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
         for (uint256 i = 0; i < recipients.length; ) {
             (bool success, ) = payable(recipients[i]).call{value: amounts[i]}("");
             require(success, "ETH transfer failed");
-            unchecked {
-                ++i;
-            }
+            unchecked { ++i; }
         }
         accumulatedRoyalties += taxFee;
         uint256 refund = msg.value - totalAmount - taxFee;
@@ -448,24 +489,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - Address of ERC20 token contract
     /// @param recipients - Array of valid recipient addresses
     /// @param amounts - Array of transfer amounts
-    function multiTransferERC20(
-        address token,
-        address[] calldata recipients,
-        uint256[] calldata amounts,
-        bool useMevProtection,
-        bytes32 salt
-    )
-        external
-        payable
-        nonReentrant
-        enforceRateLimit
-        whenNotPaused
-        emergencyNotActive
-        validateToken(token, 20)
-        validateBatchTransfer(recipients, amounts.length)
-    {
-        bytes32 commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, abi.encodePacked(amounts), salt);
-        handleMevProtection(useMevProtection, commitmentHash);
+    function _transferERC20(address token, address[] calldata recipients, uint256[] calldata amounts) internal nonReentrant {
         IERC20 erc20 = IERC20(token);
         uint256 totalFee = collectTaxFee(recipients.length);
         require(msg.value == totalFee, "Incorrect fee");
@@ -475,9 +499,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             validateRecipient(to);
             require(amt > 0, "Amount must be > 0");
             SafeERC20.safeTransferFrom(erc20, msg.sender, to, amt);
-            unchecked {
-                ++i;
-            }
+            unchecked { ++i; }
         }
     }
     /// @notice Multitransfer ERC721
@@ -485,24 +507,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - Address of ERC721 token contract
     /// @param recipients - Array of valid recipient addresses
     /// @param tokenIds - Array of ERC721 token IDs
-    function multiTransferERC721(
-        address token,
-        address[] calldata recipients,
-        uint256[] calldata tokenIds,
-        bool useMevProtection,
-        bytes32 salt
-    )
-        external
-        payable
-        nonReentrant
-        enforceRateLimit
-        whenNotPaused
-        emergencyNotActive
-        validateToken(token, 721)
-        validateBatchTransfer(recipients, tokenIds.length)
-    {
-        bytes32 commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, abi.encodePacked(tokenIds), salt);
-        handleMevProtection(useMevProtection, commitmentHash);
+    function _transferERC721(address token, address[] calldata recipients, uint256[] calldata tokenIds) internal nonReentrant {
         IERC721 erc721 = IERC721(token);
         uint256 totalFee = collectTaxFee(recipients.length);
         require(msg.value == totalFee, "Incorrect fee");
@@ -510,9 +515,6 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             address to = recipients[i];
             uint256 id = tokenIds[i];
             validateRecipient(to);
-            if (isContract(to)) {
-                require(IERC721Receiver(to).onERC721Received(msg.sender, msg.sender, id, "") == IERC721Receiver.onERC721Received.selector, "ERC721: Receiver rejected");
-            }
             try erc721.safeTransferFrom(msg.sender, to, id, "") {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
@@ -522,9 +524,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC721 transfer failed with unknown error");
             }
-            unchecked {
-                ++i;
-            }
+            unchecked { ++i; }
         }
     }
     /// @notice Multitransfer ERC1155
@@ -533,30 +533,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param recipients - Array of valid recipient addresses
     /// @param amounts - Array of transfer amounts
     /// @param ids - Array of ERC1155 token IDs
-    function multiTransferERC1155(
-        address token,
-        address[] calldata recipients,
-        uint256[] calldata ids,
-        uint256[] calldata amounts,
-        bool useMevProtection,
-        bytes32 salt
-    )
-        external
-        payable
-        nonReentrant
-        enforceRateLimit
-        whenNotPaused
-        emergencyNotActive
-        validateToken(token, 1155)
-        validateBatchTransfer(recipients, ids.length)
-    {
-        require(ids.length == amounts.length, "Mismatched ids and amounts");
-        bytes memory combinedData = abi.encodePacked(
-            keccak256(abi.encodePacked(ids)),
-            keccak256(abi.encodePacked(amounts))
-        );
-        bytes32 commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, combinedData, salt);
-        handleMevProtection(useMevProtection, commitmentHash);
+    function _transferERC1155(address token, address[] calldata recipients, uint256[] calldata ids, uint256[] calldata amounts ) internal nonReentrant {
         IERC1155 erc1155 = IERC1155(token);
         uint256 totalFee = collectTaxFee(recipients.length);
         require(msg.value == totalFee, "Incorrect fee");
@@ -567,27 +544,16 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             validateRecipient(to);
             require(erc1155.balanceOf(msg.sender, id) >= amt, "Not enough balance");
             require(amt > 0, "Amount must be > 0");
-            if (isContract(to)) {
-                try
-                    IERC1155Receiver(to).onERC1155Received(msg.sender, msg.sender, id, amt, "")
-                returns (bytes4 response) {
-                    require(response == IERC1155Receiver.onERC1155Received.selector, "ERC1155: Receiver rejected");
-                } catch {
-                    revert("ERC1155: Transfer to non-receiver contract");
-                }
-            }
             try erc1155.safeTransferFrom(msg.sender, to, id, amt, "") {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
                 emit TokenTransferFailed(token, msg.sender, to, id, reason);
                 revert(string(abi.encodePacked("ERC1155 transfer failed: ", reason)));
-            } catch (bytes memory) {
+            } catch {
                 emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC1155 transfer failed with unknown error");
             }
-            unchecked {
-                ++i;
-            }
+            unchecked { ++i; }
         }
     }
     /// @notice Grants a specific role to an address
@@ -596,8 +562,8 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param account - The address receiving the role
     function grantRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin emergencyNotActive {
         require(hasRole(getRoleAdmin(role), msg.sender), "Caller lacks admin privileges");
-        require(account != address(0), "Zero address");
-        require(!isContract(account), "Address must not be a contract");
+        require(account != address(0), "Cannot grant role to zero address");
+        require(!isContract(account), "Cannot grant role to a contract");
         require(!hasRole(role, account), "Account already has this role");
         if (role == adminRole) {
             require(getRoleMemberCount(adminRole) < maxAdmins, "Max admins");
@@ -886,6 +852,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             newRequest.tokenAddress = tokenAddress;
         } else if (withdrawalType == withdrawalTypeERC721) {
             require(tokenAddress != address(0), "Token address required");
+            require(amount == 1, "ERC721 amount must be 1");
             require(IERC721(tokenAddress).ownerOf(tokenId) == address(this), "ERC721 not owned");
             newRequest.amount = 1; 
             newRequest.tokenAddress = tokenAddress;
