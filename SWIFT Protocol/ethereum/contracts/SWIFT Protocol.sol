@@ -362,11 +362,11 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     modifier validateToken(address token, uint16 tokenType) {
         require(token != address(0), "Invalid token address");
         if (tokenType == 20) {
-            require(whitelistERC20[token], "Token not whitelisted");
+            require(whitelist[TokenWhitelist.ERC20][token], "Token not whitelisted");
         } else if (tokenType == 721) {
-            require(whitelistERC721[token], "Token not whitelisted");
+            require(whitelist[TokenWhitelist.ERC721][token], "Token not whitelisted");
         } else if (tokenType == 1155) {
-            require(whitelistERC1155[token], "Token not whitelisted");
+            require(whitelist[TokenWhitelist.ERC1155][token], "Token not whitelisted");
         }
         _;
     }
@@ -424,7 +424,6 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             validateRecipient(recipient);
             require(amount > 0, "Zero amount transfer");
             totalAmount += amount;
-            require(totalAmount >= amount, "Arithmetic overflow");
             unchecked {
                 ++i;
             }
@@ -596,7 +595,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param role - The role identifier to grant (bytes32)
     /// @param account - The address receiving the role
     function grantRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin emergencyNotActive {
-        require(getRoleAdmin(role) == msg.sender, "Caller lacks admin privileges");
+        require(hasRole(getRoleAdmin(role), msg.sender), "Caller lacks admin privileges");
         require(account != address(0), "Zero address");
         require(!isContract(account), "Address must not be a contract");
         require(!hasRole(role, account), "Account already has this role");
@@ -613,7 +612,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param role - The role identifier to revoke
     /// @param account - The address losing the role
     function revokeRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin emergencyNotActive {
-        require(getRoleAdmin(role) == msg.sender, "Caller lacks admin privileges");
+        require(hasRole(getRoleAdmin(role), msg.sender), "Caller lacks admin privileges");
         if (role == adminRole) {
             require(getRoleMemberCount(adminRole) > 1, "Cannot remove last admin");
             require(account != msg.sender, "Self-removal forbidden");
@@ -711,6 +710,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Sets transaction rate limit duration
     /// @param newDuration - New cooldown period in seconds
     function setRateLimit(uint256 newDuration) external onlyRoot {
+        require(newDuration >= 10 && newDuration <= 3600, "Rate limit must be reasonable");
         rateLimitDuration = newDuration;
         emit RateLimitUpdated(newDuration);
     }
@@ -934,11 +934,11 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             } else {
                 require(amount <= available, "Royalties reduced");
             }
-            (success, ) = payable(owner).call{value: amount}("");
-            require(success, "ETH transfer failed");
             if(wType == withdrawalTypeRoyalties) {
                 accumulatedRoyalties -= amount;
             }
+            (success, ) = payable(owner).call{value: amount}("");
+            require(success, "ETH transfer failed");
         } else if (wType == withdrawalTypeERC20 || wType == withdrawalTypeERC1155) {
             uint256 balance = wType == withdrawalTypeERC20 
                 ? IERC20(token).balanceOf(address(this)) 
