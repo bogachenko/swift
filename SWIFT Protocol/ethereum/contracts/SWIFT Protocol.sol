@@ -126,24 +126,12 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Addresses with enlarged recipient limits
     /// @return hasExtendedLimit - True if extended limit is granted
     mapping(address => bool) public extendedRecipients;
-    /// @notice Allowed ERC20 tokens for operations
-    /// @dev Token contract addresses permitted for transactions
-    /// @return isWhitelisted - True if token is approved
-    mapping(address => bool) public whitelistERC20;
-    /// @notice Allowed ERC721 tokens for operations
-    /// @dev Token contract addresses permitted for transactions
-    /// @return isWhitelisted - True if token is approved
-    mapping(address => bool) public whitelistERC721;
-    /// @notice Allowed ERC1155 tokens for operations
-    /// @dev Token contract addresses permitted for transactions
-    /// @return isWhitelisted - True if token is approved
-    mapping(address => bool) public whitelistERC1155;
     /// @notice Whitelist registry for approved token contracts
     /// @dev Nested mapping tracking allowed tokens per standard
     /// @param standard - The token standard (ERC20/ERC721/ERC1155)
     /// @param token - The token contract address to check
     /// @return bool - True if token is whitelisted for its standard
-    mapping(tokenType => mapping(address => bool)) public whitelist;
+    mapping(TokenWhitelist => mapping(address => bool)) public whitelist;
     /// @notice Mapping to store transaction commitments
     /// @dev Maps commitment hash to its timestamp
     mapping(bytes32 => uint256) public pendingCommitments;
@@ -174,12 +162,9 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @title Contains the necessary data to process requests in the contract
     /// @notice Implements security measures using templates
     /*********************************************************************/
-    /// @notice Enum representing different token standards
-    /// @dev Used to categorize whitelisted tokens
-    /// @param ERC20 - Fungible token standard
-    /// @param ERC721 - Non-fungible token (NFT) standard
-    /// @param ERC1155 - Multi-token standard
-    enum tokenType {
+    /// @notice Whitelist token enumeration
+    /// @dev Classification of whitelisted tokens
+    enum TokenWhitelist {
         ERC20,
         ERC721,
         ERC1155
@@ -248,7 +233,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param standard Token standard category
     /// @param token - Token contract address
     /// @param status - New whitelist status (true = added, false = removed)
-    event WhitelistUpdated(tokenType indexed standard, address indexed token, bool status);
+    event WhitelistUpdated(TokenWhitelist indexed standard, address indexed token, bool status);
     /// @notice Emitted when the transaction fee is updated
     /// @dev Signals a change in the protocol's tax fee percentage
     /// @param newFee - New fee value in wei
@@ -785,7 +770,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param standard - Token standard to update (ERC20/ERC721/ERC1155)
     /// @param tokens - Array of token contract addresses
     /// @param status - New whitelist status (true = add, false = remove)
-    function updateWhitelist(tokenType standard, address[] calldata tokens, bool status) external onlyRoot {
+    function updateWhitelist(TokenWhitelist standard, address[] calldata tokens, bool status) external onlyRoot {
         uint256 len = tokens.length;
         require(len > 0, "No tokens");
         for (uint256 i; i < len; ) {
