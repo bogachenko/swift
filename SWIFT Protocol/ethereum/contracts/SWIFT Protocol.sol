@@ -360,7 +360,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     require(recipients.length > 0, "Empty recipient array");
     uint256 allowedRecipients = extendedRecipients[msg.sender]
         ? maxRecipients
-        : defaultRecipients;
+        : currentRecipients;
     require(recipients.length <= allowedRecipients, "Too many recipients");
     }
 
@@ -414,6 +414,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         enforceRateLimit
         whenNotPaused
         emergencyNotActive
+        notBlacklisted(msg.sender)
     {
        _validateBatchTransfer(recipients, values.length);
         if (transferType == TransferType.ERC20) {
@@ -444,7 +445,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             revert("Unsupported transfer type");
         }
         if (useMevProtection) {
-        require(validateCommitment(commitmentHash, msg.sender), "Invalid commitment");
+            require(validateCommitment(commitmentHash), "Invalid commitment");
         clearCommitment(commitmentHash);
         }
         if (transferType == TransferType.ETH) {
@@ -471,14 +472,15 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             totalAmount += amount;
             unchecked { ++i; }
         }
-        require(msg.value >= totalAmount + taxFee, "Insufficient ETH");
+        uint256 totalFee = taxFee * recipients.length;
+        require(msg.value >= totalAmount + totalFee, "Insufficient ETH");
         for (uint256 i = 0; i < recipients.length; ) {
             (bool success, ) = payable(recipients[i]).call{value: amounts[i]}("");
             require(success, "ETH transfer failed");
             unchecked { ++i; }
         }
-        accumulatedRoyalties += taxFee;
-        uint256 refund = msg.value - totalAmount - taxFee;
+        accumulatedRoyalties += totalFee;
+        uint256 refund = msg.value - totalAmount - totalFee;
         if (refund > 0) {
             (bool refundSuccess, ) = payable(msg.sender).call{value: refund}("");
             require(refundSuccess, "Refund failed");
@@ -605,23 +607,28 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param commitmentHash - Hash of the transaction details
     function commitTransaction(bytes32 commitmentHash) external {
         require(commitmentHash != bytes32(0), "Invalid commitment hash");
-        pendingCommitments[commitmentHash] = block.timestamp;
+        pendingCommitments[commitmentHash] = (block.timestamp << 160) | uint256(uint160(msg.sender));
         emit TransactionCommitted(msg.sender, commitmentHash, block.timestamp);
     }
     /// @notice Validates a transaction commitment
     /// @dev Checks if commitment exists and is within the time window
+    /// @dev packedData layout: [commitTime (upper 96 bits) | committer (lower 160 bits)]
     /// @param commitmentHash - Hash to validate
-    /// @param committer - Address that created the commitment
-    /// @return valid - True if commitment is valid
-    function validateCommitment(bytes32 commitmentHash, address committer) internal view returns (bool valid) {
-        uint256 commitTime = pendingCommitments[commitmentHash];
-        require(committer == msg.sender, "Invalid committer");
-        return (commitTime > 0 && block.timestamp >= commitTime && block.timestamp <= commitTime + commitmentWindow);
+    function validateCommitment(bytes32 commitmentHash) internal view returns (bool) {
+        uint256 packedData = pendingCommitments[commitmentHash];
+        if (packedData == 0) return false;
+        uint256 commitTime = packedData >> 160;
+        address committer = address(uint160(packedData & ((1 << 160) - 1)));
+        return (block.timestamp >= commitTime && block.timestamp <= commitTime + commitmentWindow && committer == msg.sender);
     }
     /// @notice Clears a used commitment
     /// @dev Should be called after a commitment is used
     /// @param commitmentHash - Hash to clear
     function clearCommitment(bytes32 commitmentHash) internal {
+        uint256 packedData = pendingCommitments[commitmentHash];
+        require(packedData != 0, "No such commitment");
+        address committer = address(uint160(packedData & ((1 << 160) - 1)));
+        require(msg.sender == committer, "Not committer");
         delete pendingCommitments[commitmentHash];
     }
     /// @notice Generates a commitment hash for ETH transfers
@@ -649,7 +656,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @return Whether the commitment is valid and should be processed
     function handleMevProtection(bool useMevProtection, bytes32 commitmentHash) internal returns (bool) {
         if (useMevProtection) {
-            require(validateCommitment(commitmentHash, msg.sender), "Invalid or expired commitment");
+            require(validateCommitment(commitmentHash), "Invalid or expired commitment");
             clearCommitment(commitmentHash);
             emit CommitmentUsed(msg.sender, commitmentHash, block.timestamp);
         }
@@ -668,7 +675,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param recipientCount - Number of recipients
     function collectTaxFee(uint256 recipientCount) internal returns (uint256) {
         uint256 totalFee = taxFee * recipientCount;
-        require(msg.value >= totalFee, "Insufficient fee");
+        require(msg.value >= totalFee, "Insufficient fee amount");
         accumulatedRoyalties += totalFee;
         return totalFee;
     }
