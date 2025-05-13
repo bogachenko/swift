@@ -370,7 +370,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /*********************************************************************/
     /// @notice Initializes contract
     /// @dev Sets `msg.sender` as initial owner address
-    /// @dev Marked payable to enable ETH funding during deployment (the contract gets 1wei when deployed)
+    /// @dev Marked payable to enable ETH funding during deployment (the contract gets 1 wei when deployed)
     constructor() payable {
         owner = msg.sender;
         _grantRole(adminRole, msg.sender);
@@ -430,14 +430,14 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         if (transferType == TransferType.ETH || transferType == TransferType.ERC20) {
             commitmentHash = transferType == TransferType.ETH
                 ? getEthCommitmentHash(msg.sender, recipients, values, salt)
-                : getTokenCommitmentHash(msg.sender, token, recipients, abi.encodePacked(values), salt);
+                : getTokenCommitmentHash(msg.sender, token, recipients, abi.encode(values), salt);
         } else if (transferType == TransferType.ERC721) {
-            commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, abi.encodePacked(values), salt);
+            commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, abi.encode(values), salt);
         } else if (transferType == TransferType.ERC1155) {
             require(amounts.length == values.length, "Mismatched tokenIds and amounts");
-            bytes memory packedData = abi.encodePacked(
-                keccak256(abi.encodePacked(values)),
-                keccak256(abi.encodePacked(amounts))
+            bytes memory packedData = abi.encode(
+                keccak256(abi.encode(values)),
+                keccak256(abi.encode(amounts))
             );
             commitmentHash = getTokenCommitmentHash(msg.sender, token, recipients, packedData, salt);
         } else {
@@ -519,7 +519,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
                 emit TokenTransferFailed(token, msg.sender, to, id, reason);
-                revert(string(abi.encodePacked("ERC721 transfer failed: ", reason)));
+                revert(string(abi.encode("ERC721 transfer failed: ", reason)));
             } catch {
                 emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC721 transfer failed with unknown error");
@@ -548,7 +548,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
                 emit TokenTransferFailed(token, msg.sender, to, id, reason);
-                revert(string(abi.encodePacked("ERC1155 transfer failed: ", reason)));
+                revert(string(abi.encode("ERC1155 transfer failed: ", reason)));
             } catch {
                 emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
                 revert("ERC1155 transfer failed with unknown error");
@@ -561,7 +561,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param role - The role identifier to grant (bytes32)
     /// @param account - The address receiving the role
     function grantRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin emergencyNotActive {
-        require(hasRole(getRoleAdmin(role), msg.sender), "Caller lacks admin privileges");
+        require(hasRole(adminRole, msg.sender), "Caller is not admin");
         require(account != address(0), "Cannot grant role to zero address");
         require(!isContract(account), "Cannot grant role to a contract");
         require(!hasRole(role, account), "Account already has this role");
@@ -578,7 +578,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param role - The role identifier to revoke
     /// @param account - The address losing the role
     function revokeRole(bytes32 role, address account) public override(AccessControl, IAccessControl) onlyAdmin emergencyNotActive {
-        require(hasRole(getRoleAdmin(role), msg.sender), "Caller lacks admin privileges");
+        require(hasRole(adminRole, msg.sender), "Caller is not admin");
         if (role == adminRole) {
             require(getRoleMemberCount(adminRole) > 1, "Cannot remove last admin");
             require(account != msg.sender, "Self-removal forbidden");
@@ -631,7 +631,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param amounts - Array of transfer amounts
     /// @param salt - Random value to prevent hash prediction
     function getEthCommitmentHash(address sender, address[] calldata recipients, uint256[] calldata amounts, bytes32 salt) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(sender, keccak256(abi.encodePacked(recipients)), keccak256(abi.encodePacked(amounts)), salt));
+        return keccak256(abi.encode(keccak256(abi.encode(sender)), keccak256(abi.encode(recipients)), keccak256(abi.encode(amounts)), salt));
     }
     /// @notice Generates a commitment hash for token transfers
     /// @dev Used for ERC20/721/1155 transfers
@@ -641,7 +641,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param tokenData - Additional token data (amounts or IDs)
     /// @param salt - Random value to prevent hash prediction
     function getTokenCommitmentHash(address sender, address token, address[] calldata recipients, bytes memory tokenData, bytes32 salt) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(sender, token, keccak256(abi.encodePacked(recipients)), keccak256(tokenData), salt));
+        return keccak256(abi.encode(keccak256(abi.encode(sender)), keccak256(abi.encode(token)), keccak256(abi.encode(recipients)), keccak256(tokenData), salt));
     }
     /// @notice Handles MEV protection validation
     /// @param useMevProtection - Whether to use MEV protection
@@ -904,6 +904,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             if(wType == withdrawalTypeRoyalties) {
                 accumulatedRoyalties -= amount;
             }
+            withdrawalRequest = WithdrawalRequest(0, 0, true, "", address(0), 0, 0, 0);
             (success, ) = payable(owner).call{value: amount}("");
             require(success, "ETH transfer failed");
         } else if (wType == withdrawalTypeERC20 || wType == withdrawalTypeERC1155) {
@@ -924,7 +925,6 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         } else {
             revert("Unsupported withdrawal type");
         }
-        withdrawalRequest = WithdrawalRequest(0, 0, true, "", address(0), 0, 0, 0);
         emit WithdrawalCompleted(amount);
     }
     /// @notice Interfaces support
