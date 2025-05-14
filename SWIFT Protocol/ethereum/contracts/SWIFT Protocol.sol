@@ -128,8 +128,6 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     mapping(address => bool) public extendedRecipients;
     /// @notice Whitelist registry for approved token contracts
     /// @dev Nested mapping tracking allowed tokens per standard
-    /// @param standard - The token standard (ERC20/ERC721/ERC1155)
-    /// @param token - The token contract address to check
     /// @return bool - True if token is whitelisted for its standard
     mapping(TokenWhitelist => mapping(address => bool)) public whitelist;
     /// @notice Mapping to store transaction commitments
