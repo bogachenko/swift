@@ -18,7 +18,7 @@ import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
 /// @author Bogachenko Vyacheslav
 /// @notice SWIFT Protocol is a universal contract for batch transfers of native coins and tokens.
 /// @custom:licence License: MIT
-/// @custom:version Version 0.0.0.9 (unstable)
+/// @custom:version Version 0.0.0.9 (stable)
 
 contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /*********************************************************************/
