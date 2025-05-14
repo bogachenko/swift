@@ -474,12 +474,12 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         }
         uint256 totalFee = taxFee * recipients.length;
         require(msg.value >= totalAmount + totalFee, "Insufficient ETH");
+        accumulatedRoyalties += totalFee;
         for (uint256 i = 0; i < recipients.length; ) {
             (bool success, ) = payable(recipients[i]).call{value: amounts[i]}("");
             require(success, "ETH transfer failed");
             unchecked { ++i; }
         }
-        accumulatedRoyalties += totalFee;
         uint256 refund = msg.value - totalAmount - totalFee;
         if (refund > 0) {
             (bool refundSuccess, ) = payable(msg.sender).call{value: refund}("");
@@ -926,9 +926,11 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
             } else {
                 IERC1155(token).safeTransferFrom(address(this), owner, id, amount, "");
             }
+                withdrawalRequest = WithdrawalRequest(0, 0, true, "", address(0), 0, 0, 0);
         } else if (wType == withdrawalTypeERC721) {
             require(IERC721(token).ownerOf(id) == address(this), "Not owner of ERC721");
-            IERC721(token).safeTransferFrom(address(this), owner, id);
+                IERC721(token).safeTransferFrom(address(this), owner, id);
+                withdrawalRequest = WithdrawalRequest(0, 0, true, "", address(0), 0, 0, 0);
         } else {
             revert("Unsupported withdrawal type");
         }
