@@ -820,7 +820,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param withdrawalType - Withdrawal category identifier
     /// @param tokenAddress - Token contract address (required for ERC20/ERC721/ERC1155)
     /// @param tokenId - Token ID (required for ERC721/ERC1155)
-        function requestWithdrawal(uint256 amount, bytes32 withdrawalType, address tokenAddress, uint256 tokenId) external onlyAdmin noActiveWithdrawalRequest emergencyNotActive {
+        function requestWithdrawal(uint256 amount, bytes32 withdrawalType, address tokenAddress, uint256 tokenId) external onlyAdmin noActiveWithdrawalRequest whenNotPaused emergencyNotActive {
         require(withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled || block.timestamp > withdrawalRequest.requestTime + 7 days, "Active withdrawal request exists");
         WithdrawalRequest memory newRequest = WithdrawalRequest({
             amount: amount,
