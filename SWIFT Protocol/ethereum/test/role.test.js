@@ -7,10 +7,14 @@ const {
 } = hre;
 describe("SWIFT Protocol Role Management", () => {
 	let swift, deployer, admin, mod, user1, user2, user3;
-	const MAX_ADMINS = 3;
-	const MAX_MODS = 10;
 	beforeEach(async () => {
-		[deployer, admin, mod, user1, user2, user3] = await ethers.getSigners();
+		const signers = await ethers.getSigners();
+		deployer = signers[0];
+		admin = signers[1];
+		mod = signers[2];
+		user1 = signers[3];
+		user2 = signers[4];
+		user3 = signers[5];
 		const Swift = await ethers.getContractFactory("SWIFTProtocol");
 		swift = await Swift.deploy({
 			value: ethers.parseEther("0.01")
@@ -37,10 +41,11 @@ describe("SWIFT Protocol Role Management", () => {
 		});
 		it("should enforce max mod limit", async () => {
 			const signers = await ethers.getSigners();
-			for(let i = 0; i < MAX_MODS - 1; i++) {
-				await swift.connect(admin).grantRole(await swift.modRole(), signers[i + 3].address);
+			const maxMods = Number(await swift.maxMods());
+			for(let i = 0; i < maxMods - 1; i++) {
+				await swift.connect(admin).grantRole(await swift.modRole(), signers[i + 6].address);
 			}
-			await expect(swift.connect(admin).grantRole(await swift.modRole(), signers[MAX_MODS + 2].address)).to.be.revertedWith("Max mods");
+			await expect(swift.connect(admin).grantRole(await swift.modRole(), signers[maxMods + 5].address)).to.be.revertedWith("Max mods");
 		});
 		it("should prevent granting role to zero address", async () => {
 			await expect(swift.connect(admin).grantRole(await swift.modRole(), ethers.ZeroAddress)).to.be.revertedWith("Cannot grant role to zero address");
@@ -49,9 +54,7 @@ describe("SWIFT Protocol Role Management", () => {
 			const Dummy = await ethers.getContractFactory("SWIFTProtocol");
 			const deployedContract = await Dummy.deploy();
 			await deployedContract.waitForDeployment();
-			const adminRole = await swift.adminRole();
-			await expect(swift.grantRole(adminRole, deployedContract.target)
-			).to.be.revertedWith("Cannot grant role to a contract");
+			await expect(swift.connect(admin).grantRole(await swift.adminRole(), deployedContract.target)).to.be.revertedWith("Cannot grant role to a contract");
 		});
 		it("should prevent granting role to an address that already has it", async () => {
 			await swift.connect(admin).grantRole(await swift.modRole(), user1.address);
