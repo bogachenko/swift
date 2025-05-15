@@ -3,10 +3,10 @@ require("@nomicfoundation/hardhat-toolbox"), require("@openzeppelin/hardhat-upgr
 		version: "0.8.20",
 		settings: {
 			optimizer: {
-				enabled: !0,
+				enabled: true,
 				runs: 200
 			},
-			viaIR: !0
+			viaIR: false
 		}
 	},
 	networks: {
