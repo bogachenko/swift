@@ -399,23 +399,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param amounts - For ERC1155 only: quantities of each token to transfer
     /// @param useMevProtection - Whether to enable MEV protection mechanisms
     /// @param salt - Unique salt for commitment hash generation
-    function multiTransfer(
-        TransferType transferType,
-        address token,
-        address[] calldata recipients,
-        uint256[] calldata values,
-        uint256[] calldata amounts, 
-        bool useMevProtection,
-        bytes32 salt
-    )
-        external
-        payable
-        nonReentrant
-        enforceRateLimit
-        whenNotPaused
-        emergencyNotActive
-        notBlacklisted(msg.sender)
-    {
+    function multiTransfer(TransferType transferType, address token, address[] calldata recipients, uint256[] calldata values, uint256[] calldata amounts, bool useMevProtection, bytes32 salt) external payable nonReentrant enforceRateLimit whenNotPaused emergencyNotActive notBlacklisted(msg.sender) {
        _validateBatchTransfer(recipients, values.length);
         if (transferType == TransferType.ERC20) {
         require(token != address(0), "Token address required");
@@ -535,7 +519,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param recipients - Array of valid recipient addresses
     /// @param amounts - Array of transfer amounts
     /// @param ids - Array of ERC1155 token IDs
-    function _transferERC1155(address token, address[] calldata recipients, uint256[] calldata ids, uint256[] calldata amounts ) internal nonReentrant {
+    function _transferERC1155(address token, address[] calldata recipients, uint256[] calldata ids, uint256[] calldata amounts) internal nonReentrant {
         IERC1155 erc1155 = IERC1155(token);
         uint256 totalFee = collectTaxFee(recipients.length);
         require(msg.value == totalFee, "Incorrect fee");
@@ -836,7 +820,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param withdrawalType - Withdrawal category identifier
     /// @param tokenAddress - Token contract address (required for ERC20/ERC721/ERC1155)
     /// @param tokenId - Token ID (required for ERC721/ERC1155)
-        function requestWithdrawal(uint256 amount, bytes32 withdrawalType, address tokenAddress, uint256 tokenId) external onlyAdmin noActiveWithdrawalRequest {
+        function requestWithdrawal(uint256 amount, bytes32 withdrawalType, address tokenAddress, uint256 tokenId) external onlyAdmin noActiveWithdrawalRequest emergencyNotActive {
         require(withdrawalRequest.requestTime == 0 || withdrawalRequest.isCancelled || block.timestamp > withdrawalRequest.requestTime + 7 days, "Active withdrawal request exists");
         WithdrawalRequest memory newRequest = WithdrawalRequest({
             amount: amount,
@@ -880,20 +864,14 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         emit WithdrawalRequested(amount, block.timestamp);
     }
     /// @notice Initiates cancellation of a pending withdrawal
-    function cancelWithdrawal() external onlyAdmin {
+    function cancelWithdrawal() external onlyAdmin emergencyNotActive {
         require(withdrawalRequest.requestTime > 0, "No withdrawal request exists");
         require(!withdrawalRequest.isCancelled, "Request already cancelled");
         withdrawalRequest.isCancelled = true;
         emit WithdrawalCancelled();
     }
     /// @notice Completes withdrawal after delay
-    function completeWithdrawal()
-        external
-        onlyAdmin
-        nonReentrant
-        canWithdraw
-        isNotCancelled
-    {
+    function completeWithdrawal() external onlyAdmin nonReentrant canWithdraw isNotCancelled emergencyNotActive {
         require(owner != address(0), "Owner not set");
         WithdrawalRequest memory request = withdrawalRequest;
         uint256 amount = request.amount;
