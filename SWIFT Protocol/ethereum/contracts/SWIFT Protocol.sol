@@ -15,10 +15,12 @@ import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
 
 /// @title SWIFT Protocol
-/// @author Bogachenko Vyacheslav
 /// @notice SWIFT Protocol is a universal contract for batch transfers of native coins and tokens.
+/// @custom:source <https://github.com/bogachenkove/swiftprotocol>
+/// @author Bogachenko Vyacheslav
+/// @custom:mail bogachenkove@gmail.com
 /// @custom:licence License: MIT
-/// @custom:version Version 0.0.0.9 (unstable)
+/// @custom:version Version 0.0.0.10 (unstable)
 
 contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /*********************************************************************/
@@ -773,6 +775,9 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         require(pendingOwner != address(0), "No pending owner");
         require(msg.sender == pendingOwner, "Not pending owner");
         emit OwnershipTransferred(owner, pendingOwner);
+        if (!hasRole(adminRole, pendingOwner)) {
+        _grantRole(adminRole, pendingOwner);
+        }
         owner = pendingOwner;
         pendingOwner = address(0);
     }
