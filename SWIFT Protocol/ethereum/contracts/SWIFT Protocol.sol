@@ -356,12 +356,12 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param recipients - Array of recipient addresses
     /// @param dataLength - Length of the data array (amounts or tokenIds)
     function _validateBatchTransfer(address[] calldata recipients, uint256 dataLength) internal view {
-    require(recipients.length == dataLength, "Mismatched arrays");
-    require(recipients.length > 0, "Empty recipient array");
-    uint256 allowedRecipients = extendedRecipients[msg.sender]
-        ? maxRecipients
-        : currentRecipients;
-    require(recipients.length <= allowedRecipients, "Too many recipients");
+        require(recipients.length == dataLength, "Mismatched arrays");
+        require(recipients.length > 0, "Empty recipient array");
+        if (!extendedRecipients[msg.sender]) {
+        require(recipients.length <= currentRecipients, "Too many recipients");
+        require(currentRecipients <= maxRecipients, "Invalid recipients limit");
+        }
     }
 
     /*********************************************************************/
@@ -446,7 +446,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Batch transfers ETH to multiple recipients
     /// @param recipients - Array of recipient addresses
     /// @param amounts - Array of transfer amounts
-    function _transferETH(address[] calldata recipients, uint256[] calldata amounts) internal nonReentrant {
+    function _transferETH(address[] calldata recipients, uint256[] calldata amounts) internal {
         uint256 totalAmount;
         for (uint256 i = 0; i < recipients.length; ) {
             address recipient = recipients[i];
@@ -475,7 +475,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - Address of ERC20 token contract
     /// @param recipients - Array of valid recipient addresses
     /// @param amounts - Array of transfer amounts
-    function _transferERC20(address token, address[] calldata recipients, uint256[] calldata amounts) internal nonReentrant {
+    function _transferERC20(address token, address[] calldata recipients, uint256[] calldata amounts) internal {
         IERC20 erc20 = IERC20(token);
         uint256 totalFee = collectTaxFee(recipients.length);
         require(msg.value == totalFee, "Incorrect fee");
@@ -493,7 +493,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param token - Address of ERC721 token contract
     /// @param recipients - Array of valid recipient addresses
     /// @param tokenIds - Array of ERC721 token IDs
-    function _transferERC721(address token, address[] calldata recipients, uint256[] calldata tokenIds) internal nonReentrant {
+    function _transferERC721(address token, address[] calldata recipients, uint256[] calldata tokenIds) internal {
         IERC721 erc721 = IERC721(token);
         uint256 totalFee = collectTaxFee(recipients.length);
         require(msg.value == totalFee, "Incorrect fee");
@@ -519,7 +519,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @param recipients - Array of valid recipient addresses
     /// @param amounts - Array of transfer amounts
     /// @param ids - Array of ERC1155 token IDs
-    function _transferERC1155(address token, address[] calldata recipients, uint256[] calldata ids, uint256[] calldata amounts) internal nonReentrant {
+    function _transferERC1155(address token, address[] calldata recipients, uint256[] calldata ids, uint256[] calldata amounts) internal {
         IERC1155 erc1155 = IERC1155(token);
         uint256 totalFee = collectTaxFee(recipients.length);
         require(msg.value == totalFee, "Incorrect fee");
