@@ -87,10 +87,10 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     uint256 public accumulatedRoyalties;
     /// @notice Default recipient limit
     /// @dev Default allowance: 15 recipients
-    uint256 constant defaultRecipients = 15;
+    uint256 public constant defaultRecipients = 15;
     /// @notice Maximum recipient limit
     /// @dev Absolute maximum: 30 recipients
-    uint256 constant maxRecipients = 30;
+    uint256 public constant maxRecipients = 30;
     /// @notice Current allowed number of recipients per transaction
     /// @dev Value range: [defaultRecipients, maxRecipients]
     uint256 public currentRecipients = defaultRecipients;
@@ -675,6 +675,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Enables extended recipient limit for address
     /// @param user - Address to grant extended limit
     function setMaxRecipients(address user) external onlyRoot {
+        require(user != address(0), "Zero address");
         extendedRecipients[user] = true;
         emit MaxRecipientsSet(user, maxRecipients);
     }
@@ -682,6 +683,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @dev Resets recipient limit to default
     /// @param user - Address to grant default limit
     function setDefaultRecipients(address user) external onlyRoot {
+        require(user != address(0), "Zero address");
         extendedRecipients[user] = false;
         emit DefaultRecipientsSet(user, defaultRecipients);
     }
