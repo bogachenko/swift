@@ -739,8 +739,10 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
         for (uint256 i; i < len; ) {
             address token = tokens[i];
             require(isContract(token), "Not a contract");
-            if (!status) {
-                require(whitelist[standard][token], "Not in whitelist");
+            if (status) {
+            require(!whitelist[standard][token], "Already whitelisted");
+            } else {
+            require(whitelist[standard][token], "Not in whitelist");
             }
             whitelist[standard][token] = status;
             emit WhitelistUpdated(standard, token, status);
