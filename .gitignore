@@ -1,7 +1,10 @@
-node_modules
-artifacts
-cache
+node_modules/
+artifacts/
+cache/
 .env
-.openzeppelin
+.openzeppelin/
 package.json
 package-lock.json
+*.test.sol
+test/
+test-env/
