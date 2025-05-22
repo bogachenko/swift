@@ -13,6 +13,8 @@ import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
+import "@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol";
+import "@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol";
 
 /// @title SWIFT Protocol
 /// @notice SWIFT Protocol is a universal contract for batch transfers of native coins and tokens.
@@ -22,7 +24,7 @@ import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
 /// @custom:licence License: MIT
 /// @custom:version Version 0.0.0.10 (unstable)
 
-contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
+contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable, ERC1155Holder, ERC721Holder {
     /*********************************************************************/
     /// @title Contract configuration and state parameters
     /// @notice This section contains contract state variables and settings
@@ -505,10 +507,8 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
                 emit TokenTransferFailed(token, msg.sender, to, id, reason);
-                revert(string(abi.encode("ERC721 transfer failed: ", reason)));
             } catch {
-                emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
-                revert("ERC721 transfer failed with unknown error");
+                emit TokenTransferFailed(token, msg.sender, to, id, "ERC721 transfer failed with unknown error");
             }
             unchecked { ++i; }
         }
@@ -534,10 +534,8 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
                 emit TokenTransferSucceeded(token, msg.sender, to, id);
             } catch Error(string memory reason) {
                 emit TokenTransferFailed(token, msg.sender, to, id, reason);
-                revert(string(abi.encode("ERC1155 transfer failed: ", reason)));
             } catch {
-                emit TokenTransferFailed(token, msg.sender, to, id, "unknown error");
-                revert("ERC1155 transfer failed with unknown error");
+                emit TokenTransferFailed(token, msg.sender, to, id, "ERC1155 transfer failed with unknown error");
             }
             unchecked { ++i; }
         }
@@ -924,7 +922,7 @@ contract SWIFTProtocol is AccessControlEnumerable, ReentrancyGuard, Pausable {
     /// @notice Interfaces support
     /// @dev Low-level query to check supported interfaces
     /// @return - Returns True for supported interfaces (IERC20, IERC721, IERC1155).
-    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+    function supportsInterface(bytes4 interfaceId) public view virtual override(AccessControlEnumerable, ERC1155Holder) returns (bool) {
         return
             super.supportsInterface(interfaceId) ||
             interfaceId == type(IERC20).interfaceId ||
